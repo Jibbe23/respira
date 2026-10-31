@@ -198,3 +198,85 @@ describe("usePatternStore selectors", () => {
     });
   });
 });
+
+describe("usePatternStore transform actions", () => {
+  // Real stitches so scale/mirror can re-encode the pattern
+  const createPattern = (): PesPatternData => ({
+    ...createMockPesData({ minX: 0, maxX: 200, minY: 0, maxY: 100 }),
+    stitches: [
+      [0, 0, 0, 0],
+      [200, 0, 0, 0],
+      [200, 100, 0, 0],
+    ],
+  });
+
+  beforeEach(() => {
+    usePatternStore.getState().setPattern(createPattern(), "test.pes");
+  });
+
+  it("starts untransformed after loading a pattern", () => {
+    const state = usePatternStore.getState();
+    expect(state.patternScale).toBe(1);
+    expect(state.patternMirrored).toBe(false);
+    expect(state.pesData).toBe(state.sourcePesData);
+  });
+
+  it("rotates in steps and wraps around", () => {
+    const { rotatePatternBy } = usePatternStore.getState();
+    rotatePatternBy(-90);
+    expect(usePatternStore.getState().patternRotation).toBe(270);
+    rotatePatternBy(180);
+    expect(usePatternStore.getState().patternRotation).toBe(90);
+  });
+
+  it("scales from the source pattern and clamps the factor", () => {
+    const { setPatternScale } = usePatternStore.getState();
+    setPatternScale(2);
+    let state = usePatternStore.getState();
+    expect(state.patternScale).toBe(2);
+    // Twice as large around the center (PEN lock stitches add a few units)
+    const { minX, maxX, minY, maxY } = state.pesData!.bounds;
+    expect(Math.abs(maxX - minX - 400)).toBeLessThanOrEqual(4);
+    expect(Math.abs((minX + maxX) / 2 - 100)).toBeLessThanOrEqual(2);
+    expect(Math.abs(maxY - minY - 200)).toBeLessThanOrEqual(4);
+    // Source stays untouched
+    expect(state.sourcePesData!.stitches[1]).toEqual([200, 0, 0, 0]);
+
+    setPatternScale(100);
+    state = usePatternStore.getState();
+    expect(state.patternScale).toBe(3);
+  });
+
+  it("mirrors and adjusts the rotation, keeping the offset", () => {
+    const state = usePatternStore.getState();
+    state.setPatternOffset(40, 20);
+    state.setPatternRotation(90);
+    state.mirrorPattern("horizontal");
+
+    const after = usePatternStore.getState();
+    expect(after.patternMirrored).toBe(true);
+    expect(after.patternRotation).toBe(270);
+    // Only a small correction for the PEN lock stitches
+    expect(Math.abs(after.patternOffset.x - 40)).toBeLessThanOrEqual(5);
+    expect(Math.abs(after.patternOffset.y - 20)).toBeLessThanOrEqual(5);
+    expect(after.pesData!.stitches[1]).toEqual([0, 0, 0, 0]);
+
+    after.mirrorPattern("vertical");
+    expect(usePatternStore.getState().patternMirrored).toBe(false);
+    expect(usePatternStore.getState().patternRotation).toBe(270);
+  });
+
+  it("resets scale, mirroring and rotation", () => {
+    const state = usePatternStore.getState();
+    state.setPatternScale(1.5);
+    state.mirrorPattern("horizontal");
+    state.rotatePatternBy(90);
+    state.resetPatternTransform();
+
+    const after = usePatternStore.getState();
+    expect(after.patternScale).toBe(1);
+    expect(after.patternMirrored).toBe(false);
+    expect(after.patternRotation).toBe(0);
+    expect(after.pesData).toBe(after.sourcePesData);
+  });
+});

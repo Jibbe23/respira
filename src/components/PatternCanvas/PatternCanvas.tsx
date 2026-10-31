@@ -22,15 +22,26 @@ import { PatternPositionIndicator } from "./PatternPositionIndicator";
 import { PositionPresets } from "./PositionPresets";
 import { ZoomControls } from "./ZoomControls";
 import { PatternLayer } from "./PatternLayer";
+import { PatternTransformControls } from "./PatternTransformControls";
+import { StitchPreviewControls } from "./StitchPreviewControls";
+import {
+  getMachineStateCategory,
+  MachineStateCategory,
+} from "../../utils/machineStateHelpers";
 import { Switch } from "@/components/ui/switch";
-import { useCanvasViewport, usePatternTransform } from "@/hooks";
+import {
+  useCanvasViewport,
+  usePatternTransform,
+  useStitchPlayback,
+} from "@/hooks";
 
 export function PatternCanvas() {
   // Machine store
-  const { sewingProgress, machineInfo } = useMachineStore(
+  const { sewingProgress, machineInfo, machineStatus } = useMachineStore(
     useShallow((state) => ({
       sewingProgress: state.sewingProgress,
       machineInfo: state.machineInfo,
+      machineStatus: state.machineStatus,
     })),
   );
 
@@ -48,8 +59,15 @@ export function PatternCanvas() {
     patternRotation: initialPatternRotation,
     uploadedPesData,
     uploadedPatternOffset: initialUploadedPatternOffset,
+    sourcePesData,
+    patternScale,
+    patternMirrored,
     setPatternOffset,
     setPatternRotation,
+    setPatternScale,
+    rotatePatternBy,
+    mirrorPattern,
+    resetPatternTransform,
   } = usePatternStore(
     useShallow((state) => ({
       pesData: state.pesData,
@@ -57,8 +75,15 @@ export function PatternCanvas() {
       patternRotation: state.patternRotation,
       uploadedPesData: state.uploadedPesData,
       uploadedPatternOffset: state.uploadedPatternOffset,
+      sourcePesData: state.sourcePesData,
+      patternScale: state.patternScale,
+      patternMirrored: state.patternMirrored,
       setPatternOffset: state.setPatternOffset,
       setPatternRotation: state.setPatternRotation,
+      setPatternScale: state.setPatternScale,
+      rotatePatternBy: state.rotatePatternBy,
+      mirrorPattern: state.mirrorPattern,
+      resetPatternTransform: state.resetPatternTransform,
     })),
   );
 
@@ -108,6 +133,8 @@ export function PatternCanvas() {
     initialPatternRotation,
     setPatternOffset,
     setPatternRotation,
+    patternScale,
+    setPatternScale,
     patternUploaded,
     isUploading,
   });
@@ -135,6 +162,38 @@ export function PatternCanvas() {
     () => uploadedPesData || pesData,
     [uploadedPesData, pesData],
   );
+
+  // Pattern is still editable (not uploaded yet)
+  const isEditable =
+    !!pesData && !patternUploaded && !isUploading && !uploadedPesData;
+
+  // Stitch preview (slider / time-lapse) for the pattern currently shown
+  const totalStitches = displayPattern?.penStitches.stitches.length ?? 0;
+  // While the machine is sewing, the canvas shows the real progress instead
+  const previewAllowed =
+    !isUploading &&
+    getMachineStateCategory(machineStatus) !== MachineStateCategory.ACTIVE;
+  // Close the preview when another pattern is shown (new file, upload, delete)
+  const playback = useStitchPlayback(
+    totalStitches,
+    previewAllowed,
+    uploadedPesData ?? sourcePesData,
+  );
+  const previewStitchIndex =
+    playback.enabled && previewAllowed ? playback.position : null;
+
+  const previewColorLabel = useMemo(() => {
+    if (previewStitchIndex === null || !displayPattern) return null;
+    const blocks = displayPattern.penStitches.colorBlocks;
+    const index = Math.min(previewStitchIndex, totalStitches - 1);
+    const blockIndex = blocks.findIndex(
+      (b) => index >= b.startStitch && index <= b.endStitch,
+    );
+    if (blockIndex < 0) return null;
+    const thread = displayPattern.threads[blocks[blockIndex].colorIndex];
+    const name = thread?.description ? ` (${thread.description})` : "";
+    return `Color ${blockIndex + 1} of ${blocks.length}${name}`;
+  }, [previewStitchIndex, displayPattern, totalStitches]);
 
   // Memoize pattern dimensions calculation
   const patternDimensions = useMemo(() => {
@@ -183,6 +242,17 @@ export function PatternCanvas() {
         </div>
       </CardHeader>
       <CardContent className="px-4 pt-0 pb-4 flex-1 flex flex-col min-h-0">
+        {isEditable && (
+          <PatternTransformControls
+            scale={patternScale}
+            rotation={localPatternRotation}
+            mirrored={patternMirrored}
+            onRotateBy={rotatePatternBy}
+            onMirror={mirrorPattern}
+            onScale={setPatternScale}
+            onReset={resetPatternTransform}
+          />
+        )}
         <div
           className={`relative w-full flex-1 min-h-0 border rounded overflow-hidden ${canvasBg}`}
           ref={containerRef}
@@ -234,6 +304,7 @@ export function PatternCanvas() {
                     isInteractive={true}
                     showProgress={false}
                     currentStitchIndex={0}
+                    previewStitchIndex={previewStitchIndex}
                     patternGroupRef={patternGroupRef}
                     transformerRef={transformerRef}
                     onDragEnd={handlePatternDragEnd}
@@ -254,6 +325,7 @@ export function PatternCanvas() {
                     isInteractive={false}
                     showProgress={true}
                     currentStitchIndex={sewingProgress?.currentStitch || 0}
+                    previewStitchIndex={previewStitchIndex}
                   />
                 )}
               </Layer>
@@ -272,19 +344,15 @@ export function PatternCanvas() {
             <>
               <ThreadLegend colors={displayPattern.uniqueColors} />
 
-              {pesData &&
-                machineInfo &&
-                !patternUploaded &&
-                !isUploading &&
-                !uploadedPesData && (
-                  <PositionPresets
-                    pesData={pesData}
-                    patternRotation={localPatternRotation}
-                    machineInfo={machineInfo}
-                    onPositionSelect={handlePositionPreset}
-                    disabled={false}
-                  />
-                )}
+              {pesData && machineInfo && isEditable && (
+                <PositionPresets
+                  pesData={pesData}
+                  patternRotation={localPatternRotation}
+                  machineInfo={machineInfo}
+                  onPositionSelect={handlePositionPreset}
+                  disabled={false}
+                />
+              )}
 
               <PatternPositionIndicator
                 offset={
@@ -306,6 +374,24 @@ export function PatternCanvas() {
             </>
           )}
         </div>
+        {displayPattern && previewAllowed && (
+          <StitchPreviewControls
+            totalStitches={totalStitches}
+            enabled={playback.enabled}
+            isPlaying={playback.isPlaying}
+            position={playback.position}
+            speedIndex={playback.speedIndex}
+            colorLabel={previewColorLabel}
+            onStart={playback.start}
+            onStop={playback.stop}
+            onTogglePlay={playback.togglePlay}
+            onSeek={(index) => {
+              playback.pause();
+              playback.seek(index);
+            }}
+            onSpeedChange={playback.setSpeedIndex}
+          />
+        )}
       </CardContent>
     </Card>
   );

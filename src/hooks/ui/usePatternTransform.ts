@@ -1,7 +1,7 @@
 /**
  * usePatternTransform Hook
  *
- * Manages pattern transformation state including position, rotation, and drag/transform handling
+ * Manages pattern transformation state including position, rotation, scale, and drag/transform handling
  * Syncs local state with global pattern store
  */
 
@@ -16,9 +16,14 @@ interface UsePatternTransformOptions {
   initialPatternRotation: number;
   setPatternOffset: (x: number, y: number) => void;
   setPatternRotation: (rotation: number) => void;
+  patternScale: number;
+  setPatternScale: (scale: number) => void;
   patternUploaded: boolean;
   isUploading: boolean;
 }
+
+// Round to 1/1000 of a 0.1mm unit; "|| 0" turns -0 into 0
+const roundOffset = (value: number) => Math.round(value * 1000) / 1000 || 0;
 
 export function usePatternTransform({
   pesData,
@@ -26,6 +31,8 @@ export function usePatternTransform({
   initialPatternRotation,
   setPatternOffset,
   setPatternRotation,
+  patternScale,
+  setPatternScale,
   patternUploaded,
   isUploading,
 }: UsePatternTransformOptions) {
@@ -106,6 +113,10 @@ export function usePatternTransform({
     if (!pesData || patternUploaded || isUploading) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Arrow keys in form controls (e.g. the stitch preview slider) belong to them
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select")) return;
+
       const step = e.shiftKey ? 1 : 10; // 0.1mm or 1mm in 0.1mm units
       let dx = 0;
       let dy = 0;
@@ -166,7 +177,8 @@ export function usePatternTransform({
     [setPatternOffset],
   );
 
-  // Handle transformer rotation - just store the angle, apply at upload time
+  // Handle transformer rotation and scaling
+  // Rotation is stored and applied at upload time; scale is baked into the stitches
   const handleTransformEnd = useCallback(
     (e: KonvaEventObject<Event>) => {
       if (!pesData) return;
@@ -179,17 +191,33 @@ export function usePatternTransform({
       setLocalPatternRotation(normalizedRotation);
 
       // Also read position in case the Transformer affected it
+      // (rounded: the transformer leaves tiny float errors like -1e-13)
       const newOffset = {
-        x: node.x(),
-        y: node.y(),
+        x: roundOffset(node.x()),
+        y: roundOffset(node.y()),
       };
       setLocalPatternOffset(newOffset);
 
       // Store rotation angle and position
       setPatternRotation(normalizedRotation);
       setPatternOffset(newOffset.x, newOffset.y);
+
+      // Corner anchors scale uniformly (keepRatio); bake it into the pattern
+      // and reset the node, the recalculated stitches already have the new size
+      const nodeScale = node.scaleX();
+      if (nodeScale !== 1) node.scale({ x: 1, y: 1 });
+      // Ignore float noise from rotate-only gestures
+      if (Math.abs(nodeScale - 1) > 1e-3) {
+        setPatternScale(patternScale * nodeScale);
+      }
     },
-    [setPatternRotation, setPatternOffset, pesData],
+    [
+      setPatternRotation,
+      setPatternOffset,
+      setPatternScale,
+      patternScale,
+      pesData,
+    ],
   );
 
   return {
