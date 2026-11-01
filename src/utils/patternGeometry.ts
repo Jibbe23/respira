@@ -6,6 +6,7 @@ import {
   calculateBoundsFromDecodedStitches,
 } from "../components/PatternCanvas/patternCanvasHelpers";
 import { normalizeAngle, rotatePoint } from "./rotationUtils";
+import { MOVE } from "../formats/import/constants";
 
 /** Allowed range for uniform pattern scaling (1 = original size) */
 export const MIN_PATTERN_SCALE = 0.25;
@@ -18,6 +19,15 @@ export const MAX_PATTERN_SCALE = 3;
 export const SAFE_SCALE_RANGE = { min: 0.8, max: 1.2 };
 
 export type MirrorAxis = "horizontal" | "vertical";
+
+/**
+ * Stitch length limits for the stitch count adjustment (0.1 mm units).
+ * Enlarged stitches are split once they are longer than their original
+ * length and longer than SPLIT_STITCH_LENGTH; shrunk stitches shorter than
+ * MIN_STITCH_LENGTH are merged into the next one.
+ */
+export const SPLIT_STITCH_LENGTH = 30;
+export const MIN_STITCH_LENGTH = 3;
 
 export function clampPatternScale(scale: number): number {
   if (!Number.isFinite(scale)) return 1;
@@ -48,6 +58,72 @@ export function transformStitchesScaleMirror(
 }
 
 /**
+ * Adapt the stitch count to a scaled pattern so stitch lengths stay close to
+ * the original: enlarged stitches are split into several shorter ones,
+ * stitches that became too short when shrinking are dropped.
+ *
+ * Only plain stitches inside one color are touched; jumps, trims, color
+ * changes and the end points of a stitch run stay as they are. Fill row
+ * spacing and satin density cannot be recalculated without the original
+ * design objects, so they still scale with the pattern.
+ *
+ * @param original - stitches before scaling (for the original lengths)
+ * @param scaled - the same stitches after scaling (same order and length)
+ */
+export function adjustStitchCount(
+  original: number[][],
+  scaled: number[][],
+  scale: number,
+): number[][] {
+  if (scale === 1 || scaled.length < 2) return scaled;
+
+  // A plain stitch that continues a run of the same color
+  const isRunStitch = (i: number) =>
+    i > 0 &&
+    scaled[i][2] === 0 &&
+    (scaled[i - 1][2] & ~MOVE) === 0 &&
+    scaled[i][3] === scaled[i - 1][3];
+
+  const result: number[][] = [scaled[0]];
+
+  for (let i = 1; i < scaled.length; i++) {
+    const [x, y, cmd, color] = scaled[i];
+    const [prevX, prevY] = result[result.length - 1];
+    const length = Math.hypot(x - prevX, y - prevY);
+
+    if (scale > 1 && isRunStitch(i)) {
+      const originalLength = Math.hypot(
+        original[i][0] - original[i - 1][0],
+        original[i][1] - original[i - 1][1],
+      );
+      const maxLength = Math.max(originalLength, SPLIT_STITCH_LENGTH);
+      const parts = Math.ceil(length / maxLength);
+      for (let part = 1; part < parts; part++) {
+        result.push([
+          Math.round(prevX + ((x - prevX) * part) / parts),
+          Math.round(prevY + ((y - prevY) * part) / parts),
+          0,
+          color,
+        ]);
+      }
+    } else if (
+      scale < 1 &&
+      length < MIN_STITCH_LENGTH &&
+      isRunStitch(i) &&
+      i + 1 < scaled.length &&
+      isRunStitch(i + 1)
+    ) {
+      // Merged into the next stitch, which then starts from the last kept point
+      continue;
+    }
+
+    result.push([x, y, cmd, color]);
+  }
+
+  return result;
+}
+
+/**
  * Build the editable pattern from the original file data with scale and
  * mirroring baked into the stitches. Rotation stays a separate parameter
  * (applied at upload time), so the rest of the app keeps working unchanged.
@@ -59,11 +135,15 @@ export function applyPatternGeometry(
 ): PesPatternData {
   if (scale === 1 && !mirrored) return source;
 
-  const stitches = transformStitchesScaleMirror(
+  const stitches = adjustStitchCount(
     source.stitches,
+    transformStitchesScaleMirror(
+      source.stitches,
+      scale,
+      mirrored,
+      source.bounds,
+    ),
     scale,
-    mirrored,
-    source.bounds,
   );
 
   // Encode to PEN (rounds coordinates) and decode again, like the rotation upload
@@ -73,6 +153,7 @@ export function applyPatternGeometry(
   return {
     ...source,
     stitches,
+    stitchCount: stitches.length,
     penData,
     penStitches,
     bounds: calculateBoundsFromDecodedStitches(penStitches),

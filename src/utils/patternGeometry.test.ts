@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   transformStitchesScaleMirror,
+  adjustStitchCount,
   applyPatternGeometry,
   clampPatternScale,
   rotationAfterMirror,
@@ -9,6 +10,7 @@ import {
   MAX_PATTERN_SCALE,
 } from "./patternGeometry";
 import { rotatePoint } from "./rotationUtils";
+import { MOVE } from "../formats/import/constants";
 import { encodeStitchesToPen } from "../formats/pen/encoder";
 import { decodePenData } from "../formats/pen/decoder";
 import { calculateBoundsFromDecodedStitches } from "../components/PatternCanvas/patternCanvasHelpers";
@@ -76,7 +78,79 @@ describe("patternGeometry", () => {
     });
   });
 
+  describe("adjustStitchCount", () => {
+    it("keeps the stitches at scale 1", () => {
+      const stitches = [
+        [0, 0, 0, 0],
+        [40, 0, 0, 0],
+      ];
+      expect(adjustStitchCount(stitches, stitches, 1)).toBe(stitches);
+    });
+
+    it("splits enlarged stitches back to their original length", () => {
+      const original = [
+        [0, 0, 0, 0],
+        [40, 0, 0, 0], // 4 mm
+      ];
+      const scaled = [
+        [0, 0, 0, 0],
+        [120, 0, 0, 0], // 12 mm at 300%
+      ];
+      expect(adjustStitchCount(original, scaled, 3)).toEqual([
+        [0, 0, 0, 0],
+        [40, 0, 0, 0],
+        [80, 0, 0, 0],
+        [120, 0, 0, 0],
+      ]);
+    });
+
+    it("does not split short stitches below the split length", () => {
+      const original = [
+        [0, 0, 0, 0],
+        [10, 0, 0, 0],
+      ];
+      const scaled = [
+        [0, 0, 0, 0],
+        [25, 0, 0, 0], // 2.5 mm < SPLIT_STITCH_LENGTH
+      ];
+      expect(adjustStitchCount(original, scaled, 2.5)).toEqual(scaled);
+    });
+
+    it("does not split jumps or the first stitch of a new color", () => {
+      const original = [
+        [0, 0, 0, 0],
+        [100, 0, MOVE, 0],
+        [200, 0, 0, 1],
+      ];
+      const scaled = original.map(([x, y, c, i]) => [x * 2, y, c, i]);
+      expect(adjustStitchCount(original, scaled, 2)).toEqual(scaled);
+    });
+
+    it("drops stitches that got too short, but keeps the run end points", () => {
+      const scaled = [
+        [0, 0, 0, 0],
+        [1, 0, 0, 0], // too short, dropped
+        [2, 0, 0, 0], // too short (2 from last kept), dropped
+        [10, 0, 0, 0],
+        [11, 0, 0, 0], // too short, but last stitch: kept
+      ];
+      expect(adjustStitchCount(scaled, scaled, 0.5)).toEqual([
+        [0, 0, 0, 0],
+        [10, 0, 0, 0],
+        [11, 0, 0, 0],
+      ]);
+    });
+  });
+
   describe("applyPatternGeometry", () => {
+    it("updates the stitch count when stitches are split", () => {
+      const source = createPattern();
+      const result = applyPatternGeometry(source, 2, false);
+      // Every edge doubles in length and is split in two
+      expect(result.stitches.length).toBe(9);
+      expect(result.stitchCount).toBe(9);
+    });
+
     it("returns the source unchanged at scale 1 without mirror", () => {
       const source = createPattern();
       expect(applyPatternGeometry(source, 1, false)).toBe(source);

@@ -15,8 +15,10 @@ import {
   ArrowPathIcon,
   ExclamationTriangleIcon,
 } from "@heroicons/react/24/solid";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
+  clampPatternScale,
   MIN_PATTERN_SCALE,
   MAX_PATTERN_SCALE,
   SAFE_SCALE_RANGE,
@@ -45,6 +47,35 @@ export function PatternTransformControls({
   onReset,
 }: PatternTransformControlsProps) {
   const percent = Math.round(scale * 100);
+
+  // Text in the percent field while typing; follows the scale when it changes
+  // elsewhere (buttons, corner handles). Adjusted during render (React docs pattern)
+  const [percentDraft, setPercentDraft] = useState(String(percent));
+  const [prevPercent, setPrevPercent] = useState(percent);
+  if (prevPercent !== percent) {
+    setPrevPercent(percent);
+    setPercentDraft(String(percent));
+  }
+
+  const cancelCommitRef = useRef(false);
+
+  const commitPercent = () => {
+    if (cancelCommitRef.current) {
+      cancelCommitRef.current = false;
+      setPercentDraft(String(percent));
+      return;
+    }
+    const value = Number.parseFloat(percentDraft.replace(",", "."));
+    if (Number.isFinite(value) && value > 0) {
+      const next = clampPatternScale(value / 100);
+      onScale(next);
+      // Show the clamped value even if the rounded percent did not change
+      setPercentDraft(String(Math.round(next * 100)));
+    } else {
+      setPercentDraft(String(percent));
+    }
+  };
+
   const isTransformed = scale !== 1 || rotation !== 0 || mirrored;
   const outsideSafeRange =
     scale < SAFE_SCALE_RANGE.min || scale > SAFE_SCALE_RANGE.max;
@@ -119,12 +150,30 @@ export function PatternTransformControls({
         >
           <MinusIcon />
         </Button>
-        <span
-          className="min-w-[44px] text-center text-sm font-semibold text-gray-900 dark:text-gray-100 select-none"
-          title="Pattern size (drag the corner handles to scale)"
+        <label
+          className="flex items-center text-sm font-semibold text-gray-900 dark:text-gray-100"
+          title="Pattern size in percent (or drag the corner handles)"
         >
-          {percent}%
-        </span>
+          <input
+            type="text"
+            inputMode="numeric"
+            aria-label="Pattern size in percent"
+            value={percentDraft}
+            onChange={(e) => setPercentDraft(e.target.value)}
+            onBlur={commitPercent}
+            onKeyDown={(e) => {
+              // Leaving the field commits (onBlur); Escape skips that once
+              if (e.key === "Enter") {
+                e.currentTarget.blur();
+              } else if (e.key === "Escape") {
+                cancelCommitRef.current = true;
+                e.currentTarget.blur();
+              }
+            }}
+            className="w-12 h-8 px-1 text-right bg-transparent border border-gray-300 dark:border-gray-600 rounded-md outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+          />
+          <span className="ml-0.5">%</span>
+        </label>
         <Button
           variant="outline"
           size="icon-sm"
@@ -133,6 +182,16 @@ export function PatternTransformControls({
           title="Larger"
         >
           <PlusIcon />
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 px-2 text-xs"
+          onClick={() => onScale(1)}
+          disabled={scale === 1}
+          title="Reset size to 100%"
+        >
+          100%
         </Button>
 
         <Button
@@ -149,8 +208,8 @@ export function PatternTransformControls({
       {outsideSafeRange && (
         <p className="flex items-center gap-1 text-xs text-warning-700 dark:text-warning-400 m-0">
           <ExclamationTriangleIcon className="w-3.5 h-3.5 flex-shrink-0" />
-          Large size changes keep the stitch count, so stitches become denser or
-          longer. Check the result before sewing.
+          The stitch count is adjusted, but fill and satin density still change
+          with the size. Check the result before sewing.
         </p>
       )}
     </div>
