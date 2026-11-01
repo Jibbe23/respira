@@ -26,6 +26,7 @@ import { PatternTransformControls } from "./PatternTransformControls";
 import { StitchPreviewControls } from "./StitchPreviewControls";
 import {
   getMachineStateCategory,
+  canSetStitchPosition,
   MachineStateCategory,
 } from "../../utils/machineStateHelpers";
 import { Switch } from "@/components/ui/switch";
@@ -37,11 +38,19 @@ import {
 
 export function PatternCanvas() {
   // Machine store
-  const { sewingProgress, machineInfo, machineStatus } = useMachineStore(
+  const {
+    sewingProgress,
+    machineInfo,
+    machineStatus,
+    adjustedStitchIndex,
+    setStitchPosition,
+  } = useMachineStore(
     useShallow((state) => ({
       sewingProgress: state.sewingProgress,
       machineInfo: state.machineInfo,
       machineStatus: state.machineStatus,
+      adjustedStitchIndex: state.adjustedStitchIndex,
+      setStitchPosition: state.setStitchPosition,
     })),
   );
 
@@ -181,6 +190,14 @@ export function PatternCanvas() {
   );
   const previewStitchIndex =
     playback.enabled && previewAllowed ? playback.position : null;
+
+  // Continue sewing from a stitch picked in the preview (pattern on the machine)
+  const canContinueFrom =
+    !!uploadedPesData && !isUploading && canSetStitchPosition(machineStatus);
+  const machineStitch = Math.min(
+    adjustedStitchIndex ?? sewingProgress?.currentStitch ?? 0,
+    totalStitches,
+  );
 
   const previewColorLabel = useMemo(() => {
     if (previewStitchIndex === null || !displayPattern) return null;
@@ -324,7 +341,7 @@ export function PatternCanvas() {
                     offset={initialUploadedPatternOffset}
                     isInteractive={false}
                     showProgress={true}
-                    currentStitchIndex={sewingProgress?.currentStitch || 0}
+                    currentStitchIndex={machineStitch}
                     previewStitchIndex={previewStitchIndex}
                   />
                 )}
@@ -382,7 +399,27 @@ export function PatternCanvas() {
             position={playback.position}
             speedIndex={playback.speedIndex}
             colorLabel={previewColorLabel}
-            onStart={playback.start}
+            onStart={
+              canContinueFrom
+                ? () => playback.openAt(machineStitch)
+                : playback.start
+            }
+            continueFrom={
+              canContinueFrom
+                ? {
+                    machineStitch,
+                    onContinue: async (index) => {
+                      await setStitchPosition(index, totalStitches);
+                      // Keep the preview open if the machine refused it
+                      if (
+                        useMachineStore.getState().adjustedStitchIndex === index
+                      ) {
+                        playback.stop();
+                      }
+                    },
+                  }
+                : null
+            }
             onStop={playback.stop}
             onTogglePlay={playback.togglePlay}
             onSeek={(index) => {

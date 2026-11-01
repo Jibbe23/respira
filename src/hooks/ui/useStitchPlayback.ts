@@ -32,7 +32,7 @@ export function advancePlayback(
 
 /**
  * @param totalStitches - Stitch count of the pattern shown
- * @param allowed - false pauses playback (e.g. while the machine is sewing)
+ * @param allowed - false closes the preview (e.g. while the machine is sewing)
  * @param resetKey - the preview closes when this value changes (other pattern)
  */
 export function useStitchPlayback(
@@ -52,7 +52,10 @@ export function useStitchPlayback(
     setEnabled(false);
     setIsPlaying(false);
   }
-  if (!allowed && isPlaying) {
+  // Closed (not only paused) so it does not reopen at a stale position
+  // after the machine sewed on in the meantime
+  if (!allowed && (enabled || isPlaying)) {
+    setEnabled(false);
     setIsPlaying(false);
   }
 
@@ -102,6 +105,16 @@ export function useStitchPlayback(
     setIsPlaying(true);
   }, [seek]);
 
+  // Open paused at a given stitch (e.g. where the machine stopped)
+  const openAt = useCallback(
+    (index: number) => {
+      setEnabled(true);
+      setIsPlaying(false);
+      seek(index);
+    },
+    [seek],
+  );
+
   const stop = useCallback(() => {
     setEnabled(false);
     setIsPlaying(false);
@@ -124,6 +137,7 @@ export function useStitchPlayback(
     position: Math.min(position, totalStitches),
     speedIndex,
     start,
+    openAt,
     stop,
     togglePlay,
     seek,

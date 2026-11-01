@@ -158,6 +158,10 @@ export const useMachineStore = create<MachineState>((set, get) => ({
         machineStatusName: MachineStatusNames[MachineStatus.None] || "Unknown",
         patternInfo: null,
         sewingProgress: null,
+        // Step control positions belong to the pattern that is gone now
+        adjustedStitchIndex: null,
+        pausedStitchIndex: null,
+        lastRolledBackError: null,
         error: null,
         machineError: SewingMachineError.None,
       });
@@ -322,6 +326,10 @@ export const useMachineStore = create<MachineState>((set, get) => ({
       set({
         patternInfo: null,
         sewingProgress: null,
+        // Step control positions belong to the pattern that is gone now
+        adjustedStitchIndex: null,
+        pausedStitchIndex: null,
+        lastRolledBackError: null,
       });
 
       // Emit pattern deleted event for other stores to react
@@ -421,6 +429,10 @@ export const useMachineStore = create<MachineState>((set, get) => ({
         machineError: SewingMachineError.None,
         patternInfo: null,
         sewingProgress: null,
+        // Step control positions belong to the pattern that is gone now
+        adjustedStitchIndex: null,
+        pausedStitchIndex: null,
+        lastRolledBackError: null,
         error: "Device disconnected",
         isPairingError: false,
       });

@@ -11,6 +11,7 @@ import {
   PauseIcon,
   FilmIcon,
   XMarkIcon,
+  ForwardIcon,
 } from "@heroicons/react/24/solid";
 import { Button } from "@/components/ui/button";
 import { PLAYBACK_SPEEDS } from "@/hooks";
@@ -27,6 +28,11 @@ interface StitchPreviewControlsProps {
   onTogglePlay: () => void;
   onSeek: (index: number) => void;
   onSpeedChange: (index: number) => void;
+  // Set when the uploaded pattern can continue from another stitch
+  continueFrom: {
+    machineStitch: number; // where the machine continues right now
+    onContinue: (index: number) => void | Promise<void>;
+  } | null;
 }
 
 export function StitchPreviewControls({
@@ -41,6 +47,7 @@ export function StitchPreviewControls({
   onTogglePlay,
   onSeek,
   onSpeedChange,
+  continueFrom,
 }: StitchPreviewControlsProps) {
   if (!enabled) {
     return (
@@ -53,7 +60,7 @@ export function StitchPreviewControls({
           title="Play back the stitch sequence"
         >
           <FilmIcon />
-          Stitch preview
+          {continueFrom ? "Choose where to continue" : "Stitch preview"}
         </Button>
       </div>
     );
@@ -113,6 +120,23 @@ export function StitchPreviewControls({
           ))}
         </div>
       </div>
+      {continueFrom && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-gray-700 dark:text-gray-300">
+          <Button
+            size="sm"
+            onClick={() => continueFrom.onContinue(position)}
+            disabled={position === continueFrom.machineStitch}
+            title="The machine continues sewing from this stitch when you resume"
+          >
+            <ForwardIcon />
+            Continue from here
+          </Button>
+          <span>
+            Machine is at stitch {continueFrom.machineStitch.toLocaleString()}.
+            Move the slider to the last good stitch, then resume sewing.
+          </span>
+        </div>
+      )}
     </div>
   );
 }

@@ -161,6 +161,20 @@ export function canShowStepControl(
 }
 
 /**
+ * Determines if the machine accepts a new stitch position (continue sewing
+ * from another stitch): while paused/stopped/interrupted, and in SEWING_WAIT
+ * also before sewing started (e.g. after re-uploading an interrupted pattern).
+ */
+export function canSetStitchPosition(status: MachineStatus): boolean {
+  return (
+    status === MachineStatus.PAUSE ||
+    status === MachineStatus.STOP ||
+    status === MachineStatus.SEWING_INTERRUPTION ||
+    status === MachineStatus.SEWING_WAIT
+  );
+}
+
+/**
  * Determines if disconnect should show a confirmation dialog.
  * Confirms if disconnecting during active operation or while waiting.
  */
