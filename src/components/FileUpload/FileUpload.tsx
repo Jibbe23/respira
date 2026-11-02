@@ -23,7 +23,8 @@ import {
 import { getDisplayFilename } from "../../utils/displayFilename";
 import { PatternInfoSkeleton } from "../SkeletonLoader";
 import { PatternInfo } from "../PatternInfo";
-import { DocumentTextIcon } from "@heroicons/react/24/solid";
+import { DocumentTextIcon, PhotoIcon } from "@heroicons/react/24/solid";
+import { Button } from "@/components/ui/button";
 import { createFileService } from "../../platform";
 import type { IFileService } from "../../platform/interfaces/IFileService";
 import { Card, CardContent } from "@/components/ui/card";
@@ -33,6 +34,7 @@ import { PyodideProgress } from "./PyodideProgress";
 import { UploadButton } from "./UploadButton";
 import { UploadProgress } from "./UploadProgress";
 import { BoundsValidator } from "./BoundsValidator";
+import { ImageToEmbroideryDialog } from "./ImageToEmbroideryDialog";
 
 export function FileUpload() {
   // Machine store
@@ -101,6 +103,7 @@ export function FileUpload() {
   const [localPesData, setLocalPesData] = useState<PesPatternData | null>(null);
   const [fileName, setFileName] = useState<string>("");
   const [fileService] = useState<IFileService>(() => createFileService());
+  const [imageDialogOpen, setImageDialogOpen] = useState(false);
 
   // Use prop pesData if available (from cached pattern), otherwise use local state
   const pesData = pesDataProp || localPesData;
@@ -112,18 +115,20 @@ export function FileUpload() {
   });
 
   // File upload hook - handles file selection and conversion
+  const handlePatternLoaded = useCallback(
+    (data: PesPatternData, name: string) => {
+      setLocalPesData(data);
+      setFileName(name);
+      setPattern(data, name);
+    },
+    [setPattern],
+  );
+
   const { isLoading, handleFileChange } = useFileUpload({
     fileService,
     pyodideReady,
     initializePyodide,
-    onFileLoaded: useCallback(
-      (data: PesPatternData, name: string) => {
-        setLocalPesData(data);
-        setFileName(name);
-        setPattern(data, name);
-      },
-      [setPattern],
-    ),
+    onFileLoaded: handlePatternLoaded,
   });
 
   // Pattern rotation and upload hook - handles rotation transformation
@@ -235,6 +240,27 @@ export function FileUpload() {
             patternUploaded={patternUploaded}
           />
         </div>
+
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-full mb-3"
+          onClick={() => setImageDialogOpen(true)}
+          disabled={isSelectorDisabled}
+        >
+          <PhotoIcon />
+          Image to embroidery
+        </Button>
+        {imageDialogOpen && (
+          <ImageToEmbroideryDialog
+            open={imageDialogOpen}
+            onOpenChange={setImageDialogOpen}
+            // machineInfo is in 0.1 mm; 100 × 100 mm until a machine is connected
+            hoopWidthMm={(machineInfo?.maxWidth ?? 1000) / 10}
+            hoopHeightMm={(machineInfo?.maxHeight ?? 1000) / 10}
+            onApply={handlePatternLoaded}
+          />
+        )}
 
         <PyodideProgress
           pyodideReady={pyodideReady}

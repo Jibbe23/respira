@@ -38,6 +38,7 @@
     "clsx": "^2.1.1",
     "electron-squirrel-startup": "^1.0.1",
     "electron-store": "^10.0.0",
+    "imagetracerjs": "1.2.6",
     "konva": "^10.0.12",
     "lucide-react": "^0.562.0",
     "pyodide": "^0.29.0",
