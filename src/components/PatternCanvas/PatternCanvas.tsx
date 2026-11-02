@@ -127,45 +127,6 @@ export function PatternCanvas() {
     [setPatternOffset],
   );
 
-  // Pattern transform (position, rotation, drag/transform)
-  const {
-    localPatternOffset,
-    localPatternRotation,
-    patternGroupRef,
-    transformerRef,
-    attachTransformer,
-    handlePatternDragEnd,
-    handleTransformEnd,
-  } = usePatternTransform({
-    pesData,
-    initialPatternOffset,
-    initialPatternRotation,
-    setPatternOffset,
-    setPatternRotation,
-    patternScale,
-    setPatternScale,
-    patternUploaded,
-    isUploading,
-  });
-
-  const [previewDark, setPreviewDark] = useState(
-    () => window.matchMedia("(prefers-color-scheme: dark)").matches,
-  );
-
-  const canvasBg = previewDark
-    ? "bg-gray-900 border-gray-600"
-    : "bg-gray-200 border-gray-300";
-  const canvasGridColor = previewDark ? "#404040" : "#e0e0e0";
-  const canvasOriginColor = previewDark ? "#999999" : "#888888";
-
-  const hasPattern = pesData || uploadedPesData;
-  const borderColor = hasPattern
-    ? "border-tertiary-600 dark:border-tertiary-500"
-    : "border-gray-400 dark:border-gray-600";
-  const iconColor = hasPattern
-    ? "text-tertiary-600 dark:text-tertiary-400"
-    : "text-gray-600 dark:text-gray-400";
-
   // Memoize the display pattern to avoid recalculation
   const displayPattern = useMemo(
     () => uploadedPesData || pesData,
@@ -190,6 +151,47 @@ export function PatternCanvas() {
   );
   const previewStitchIndex =
     playback.enabled && previewAllowed ? playback.position : null;
+
+  // Pattern transform (position, rotation, drag/transform)
+  const {
+    localPatternOffset,
+    localPatternRotation,
+    patternGroupRef,
+    transformerRef,
+    attachTransformer,
+    handlePatternDragEnd,
+    handleTransformEnd,
+  } = usePatternTransform({
+    pesData,
+    initialPatternOffset,
+    initialPatternRotation,
+    setPatternOffset,
+    setPatternRotation,
+    patternScale,
+    setPatternScale,
+    patternUploaded,
+    isUploading,
+    // The stitch preview is view-only: arrow keys must not move the pattern
+    arrowKeysEnabled: !playback.enabled,
+  });
+
+  const [previewDark, setPreviewDark] = useState(
+    () => window.matchMedia("(prefers-color-scheme: dark)").matches,
+  );
+
+  const canvasBg = previewDark
+    ? "bg-gray-900 border-gray-600"
+    : "bg-gray-200 border-gray-300";
+  const canvasGridColor = previewDark ? "#404040" : "#e0e0e0";
+  const canvasOriginColor = previewDark ? "#999999" : "#888888";
+
+  const hasPattern = pesData || uploadedPesData;
+  const borderColor = hasPattern
+    ? "border-tertiary-600 dark:border-tertiary-500"
+    : "border-gray-400 dark:border-gray-600";
+  const iconColor = hasPattern
+    ? "text-tertiary-600 dark:text-tertiary-400"
+    : "text-gray-600 dark:text-gray-400";
 
   // Continue sewing from a stitch picked in the preview (pattern on the machine)
   const canContinueFrom =
@@ -409,11 +411,8 @@ export function PatternCanvas() {
                 ? {
                     machineStitch,
                     onContinue: async (index) => {
-                      await setStitchPosition(index, totalStitches);
                       // Keep the preview open if the machine refused it
-                      if (
-                        useMachineStore.getState().adjustedStitchIndex === index
-                      ) {
+                      if (await setStitchPosition(index, totalStitches)) {
                         playback.stop();
                       }
                     },

@@ -275,7 +275,8 @@ export const Stitches = memo(
             const isCompleted = absoluteIndex < currentStitchIndex;
 
             if (!currentSubGroup || currentSubGroup.completed !== isCompleted) {
-              if (staticGroup.isJump && i > 0) {
+              // Start at the previous point so the stitch at the split is drawn
+              if (i > 0) {
                 currentSubGroup = {
                   color: staticGroup.color,
                   points: [prevX, prevY, x, y],

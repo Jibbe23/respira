@@ -6,7 +6,6 @@ import {
   calculateBoundsFromDecodedStitches,
 } from "../components/PatternCanvas/patternCanvasHelpers";
 import { normalizeAngle, rotatePoint } from "./rotationUtils";
-import { MOVE } from "../formats/import/constants";
 
 /** Allowed range for uniform pattern scaling (1 = original size) */
 export const MIN_PATTERN_SCALE = 0.25;
@@ -17,6 +16,13 @@ export const MAX_PATTERN_SCALE = 3;
  * (stitches get too dense or too long), so the UI shows a hint.
  */
 export const SAFE_SCALE_RANGE = { min: 0.8, max: 1.2 };
+
+/**
+ * Round an offset to 1/1000 of a 0.1 mm unit, so float noise does not show up
+ * as "-0.0mm" ("|| 0" turns -0 into 0)
+ */
+export const roundOffset = (value: number) =>
+  Math.round(value * 1000) / 1000 || 0;
 
 export type MirrorAxis = "horizontal" | "vertical";
 
@@ -77,11 +83,12 @@ export function adjustStitchCount(
 ): number[][] {
   if (scale === 1 || scaled.length < 2) return scaled;
 
-  // A plain stitch that continues a run of the same color
+  // A plain stitch that continues a run of the same color (the first stitch
+  // after a jump is the tie-in and stays as it is)
   const isRunStitch = (i: number) =>
     i > 0 &&
     scaled[i][2] === 0 &&
-    (scaled[i - 1][2] & ~MOVE) === 0 &&
+    scaled[i - 1][2] === 0 &&
     scaled[i][3] === scaled[i - 1][3];
 
   const result: number[][] = [scaled[0]];
@@ -153,7 +160,8 @@ export function applyPatternGeometry(
   return {
     ...source,
     stitches,
-    stitchCount: stitches.length,
+    // Same meaning as the importer's count, plus the stitches added/removed
+    stitchCount: source.stitchCount + stitches.length - source.stitches.length,
     penData,
     penStitches,
     bounds: calculateBoundsFromDecodedStitches(penStitches),
@@ -199,7 +207,8 @@ export function offsetKeepingPivot(
   };
   const b = screenDelta(before.bounds, before.rotation);
   const a = screenDelta(after.bounds, after.rotation);
-  // Rounded so float noise does not show up as "-0.0mm" ("|| 0" turns -0 into 0)
-  const round = (value: number) => Math.round(value * 1000) / 1000 || 0;
-  return { x: round(offset.x + b.x - a.x), y: round(offset.y + b.y - a.y) };
+  return {
+    x: roundOffset(offset.x + b.x - a.x),
+    y: roundOffset(offset.y + b.y - a.y),
+  };
 }

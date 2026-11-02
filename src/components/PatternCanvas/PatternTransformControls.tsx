@@ -65,6 +65,8 @@ export function PatternTransformControls({
       setPercentDraft(String(percent));
       return;
     }
+    // Unchanged text: keep a dragged scale like 102.34 % as it is
+    if (percentDraft === String(percent)) return;
     const value = Number.parseFloat(percentDraft.replace(",", "."));
     if (Number.isFinite(value) && value > 0) {
       const next = clampPatternScale(value / 100);

@@ -126,6 +126,16 @@ describe("patternGeometry", () => {
       expect(adjustStitchCount(original, scaled, 2)).toEqual(scaled);
     });
 
+    it("keeps the tie-in stitch after a jump", () => {
+      const original = [
+        [0, 0, 0, 0],
+        [100, 0, MOVE, 0],
+        [140, 0, 0, 0],
+      ];
+      const scaled = original.map(([x, y, c, i]) => [x * 3, y, c, i]);
+      expect(adjustStitchCount(original, scaled, 3)).toEqual(scaled);
+    });
+
     it("drops stitches that got too short, but keeps the run end points", () => {
       const scaled = [
         [0, 0, 0, 0],

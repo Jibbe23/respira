@@ -9,6 +9,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import type Konva from "konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import type { PesPatternData } from "../../formats/import/pesImporter";
+import { roundOffset } from "../../utils/patternGeometry";
 
 interface UsePatternTransformOptions {
   pesData: PesPatternData | null;
@@ -20,10 +21,8 @@ interface UsePatternTransformOptions {
   setPatternScale: (scale: number) => void;
   patternUploaded: boolean;
   isUploading: boolean;
+  arrowKeysEnabled?: boolean;
 }
-
-// Round to 1/1000 of a 0.1mm unit; "|| 0" turns -0 into 0
-const roundOffset = (value: number) => Math.round(value * 1000) / 1000 || 0;
 
 export function usePatternTransform({
   pesData,
@@ -35,6 +34,7 @@ export function usePatternTransform({
   setPatternScale,
   patternUploaded,
   isUploading,
+  arrowKeysEnabled = true,
 }: UsePatternTransformOptions) {
   const [localPatternOffset, setLocalPatternOffset] = useState(
     initialPatternOffset || { x: 0, y: 0 },
@@ -110,12 +110,16 @@ export function usePatternTransform({
 
   // Arrow key movement: 1mm per press, 0.1mm with Shift
   useEffect(() => {
-    if (!pesData || patternUploaded || isUploading) return;
+    if (!pesData || patternUploaded || isUploading || !arrowKeysEnabled) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       // Arrow keys in form controls (e.g. the stitch preview slider) belong to them
-      const target = e.target as HTMLElement | null;
-      if (target?.closest("input, textarea, select")) return;
+      if (
+        e.target instanceof Element &&
+        e.target.closest("input, textarea, select")
+      ) {
+        return;
+      }
 
       const step = e.shiftKey ? 1 : 10; // 0.1mm or 1mm in 0.1mm units
       let dx = 0;
@@ -140,16 +144,26 @@ export function usePatternTransform({
 
       e.preventDefault();
 
-      setLocalPatternOffset((prev) => {
-        const newOffset = { x: prev.x + dx, y: prev.y + dy };
-        setPatternOffset(newOffset.x, newOffset.y);
-        return newOffset;
-      });
+      // Not inside a state updater: updating the store there would update
+      // other components while this one renders
+      const newOffset = {
+        x: localPatternOffset.x + dx,
+        y: localPatternOffset.y + dy,
+      };
+      setLocalPatternOffset(newOffset);
+      setPatternOffset(newOffset.x, newOffset.y);
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [pesData, patternUploaded, isUploading, setPatternOffset]);
+  }, [
+    pesData,
+    patternUploaded,
+    isUploading,
+    arrowKeysEnabled,
+    localPatternOffset,
+    setPatternOffset,
+  ]);
 
   // Center pattern in hoop
   const handleCenterPattern = useCallback(() => {
