@@ -1,0 +1,239 @@
+/**
+ * Image tracing: reduce an image to a few colors and turn each color into
+ * filled regions (outer contour plus holes), using imagetracerjs.
+ */
+
+import ImageTracer from "imagetracerjs";
+import type { Point, Ring } from "./fillStitches";
+
+export interface RGBA {
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+}
+
+export interface TracedRegion {
+  colorIndex: number; // index into palette
+  rings: Ring[]; // outer contour first, then holes (pixel coordinates)
+}
+
+export interface TracedImage {
+  width: number;
+  height: number;
+  palette: RGBA[];
+  regions: TracedRegion[];
+  backgroundIndex: number | null; // most common border color, if dominant
+}
+
+interface TraceSegment {
+  type: "L" | "Q";
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  x3?: number;
+  y3?: number;
+}
+
+interface TracePath {
+  segments: TraceSegment[];
+  isholepath: boolean;
+  holechildren: number[];
+}
+
+/** Share of border pixels a color needs to count as background */
+const BACKGROUND_BORDER_SHARE = 0.6;
+/** k-means rounds for the palette */
+const PALETTE_ITERATIONS = 10;
+
+/**
+ * Palette of `colors` colors for the opaque pixels: k-means on a 5-bit color
+ * histogram, seeded with frequent colors that are far apart from each other
+ * (so anti-aliased edge pixels do not get a color of their own). A
+ * transparent entry is added when the image has transparent pixels.
+ */
+export function quantizePalette(imageData: ImageData, colors: number): RGBA[] {
+  const { data } = imageData;
+  const bins = new Map<
+    number,
+    { n: number; r: number; g: number; b: number }
+  >();
+  let transparent = false;
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 128) {
+      transparent = true;
+      continue;
+    }
+    const key =
+      ((data[i] >> 3) << 10) | ((data[i + 1] >> 3) << 5) | (data[i + 2] >> 3);
+    const bin = bins.get(key) ?? { n: 0, r: 0, g: 0, b: 0 };
+    bin.n++;
+    bin.r += data[i];
+    bin.g += data[i + 1];
+    bin.b += data[i + 2];
+    bins.set(key, bin);
+  }
+  const points = [...bins.values()].map((bin) => ({
+    n: bin.n,
+    r: bin.r / bin.n,
+    g: bin.g / bin.n,
+    b: bin.b / bin.n,
+  }));
+  const distance = (
+    p: { r: number; g: number; b: number },
+    q: { r: number; g: number; b: number },
+  ) => (p.r - q.r) ** 2 + (p.g - q.g) ** 2 + (p.b - q.b) ** 2;
+
+  const centers: { r: number; g: number; b: number }[] = [];
+  if (points.length > 0) {
+    centers.push(points.reduce((a, b) => (b.n > a.n ? b : a)));
+  }
+  while (centers.length < Math.min(colors, points.length)) {
+    let best = points[0];
+    let bestScore = -1;
+    for (const p of points) {
+      const score = p.n * Math.min(...centers.map((c) => distance(p, c)));
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+    if (bestScore <= 0) break;
+    centers.push({ ...best });
+  }
+
+  for (let round = 0; round < PALETTE_ITERATIONS; round++) {
+    const sums = centers.map(() => ({ n: 0, r: 0, g: 0, b: 0 }));
+    for (const p of points) {
+      let k = 0;
+      let kDistance = Infinity;
+      centers.forEach((c, i) => {
+        const d = distance(p, c);
+        if (d < kDistance) {
+          kDistance = d;
+          k = i;
+        }
+      });
+      sums[k].n += p.n;
+      sums[k].r += p.r * p.n;
+      sums[k].g += p.g * p.n;
+      sums[k].b += p.b * p.n;
+    }
+    sums.forEach((sum, i) => {
+      if (sum.n > 0) {
+        centers[i] = { r: sum.r / sum.n, g: sum.g / sum.n, b: sum.b / sum.n };
+      }
+    });
+  }
+
+  const palette: RGBA[] = centers.map((c) => ({
+    r: Math.round(c.r),
+    g: Math.round(c.g),
+    b: Math.round(c.b),
+    a: 255,
+  }));
+  if (transparent) palette.push({ r: 0, g: 0, b: 0, a: 0 });
+  return palette;
+}
+
+/** Closed polygon from a traced path; quadratic curves are flattened */
+function pathToRing(path: TracePath): Ring {
+  const ring: Point[] = [];
+  for (const s of path.segments) {
+    ring.push({ x: s.x1, y: s.y1 });
+    if (s.type === "Q" && s.x3 !== undefined && s.y3 !== undefined) {
+      for (const t of [0.25, 0.5, 0.75]) {
+        const u = 1 - t;
+        ring.push({
+          x: u * u * s.x1 + 2 * u * t * s.x2 + t * t * s.x3,
+          y: u * u * s.y1 + 2 * u * t * s.y2 + t * t * s.y3,
+        });
+      }
+    }
+  }
+  return ring;
+}
+
+function nearestPaletteIndex(palette: RGBA[], r: number, g: number, b: number) {
+  let best = 0;
+  let bestDistance = Infinity;
+  palette.forEach((c, i) => {
+    const d = (c.r - r) ** 2 + (c.g - g) ** 2 + (c.b - b) ** 2;
+    if (d < bestDistance) {
+      bestDistance = d;
+      best = i;
+    }
+  });
+  return best;
+}
+
+/** Palette color covering most of the image border, if it dominates */
+function findBackground(imageData: ImageData, palette: RGBA[]): number | null {
+  const { width, height, data } = imageData;
+  const counts = new Array<number>(palette.length).fill(0);
+  let total = 0;
+  const count = (x: number, y: number) => {
+    const i = (y * width + x) * 4;
+    if (data[i + 3] < 128) return; // transparent pixels are skipped anyway
+    counts[nearestPaletteIndex(palette, data[i], data[i + 1], data[i + 2])]++;
+    total++;
+  };
+  for (let x = 0; x < width; x++) {
+    count(x, 0);
+    count(x, height - 1);
+  }
+  for (let y = 1; y < height - 1; y++) {
+    count(0, y);
+    count(width - 1, y);
+  }
+  if (total === 0) return null;
+  const best = counts.indexOf(Math.max(...counts));
+  return counts[best] / total >= BACKGROUND_BORDER_SHARE ? best : null;
+}
+
+/**
+ * Trace an image into colored regions
+ *
+ * @param palette - colors to map the pixels to (see quantizePalette)
+ */
+export function traceImage(imageData: ImageData, palette: RGBA[]): TracedImage {
+  const traced = ImageTracer.imagedataToTracedata(imageData, {
+    // Copy: the tracer keeps a reference and may average it
+    pal: palette.map((c) => ({ ...c })),
+    colorquantcycles: 1, // only map pixels to the palette above
+    pathomit: 16, // drop specks smaller than this many pixels
+    ltres: 1,
+    qtres: 1,
+    rightangleenhance: false,
+    blurradius: 0,
+  }) as {
+    width: number;
+    height: number;
+    palette: RGBA[];
+    layers: TracePath[][];
+  };
+
+  const regions: TracedRegion[] = [];
+  traced.layers.forEach((paths, colorIndex) => {
+    // Fully transparent colors (e.g. PNG background) are never sewn
+    if (traced.palette[colorIndex].a < 128) return;
+    for (const path of paths) {
+      if (path.isholepath) continue;
+      const outer = pathToRing(path);
+      if (outer.length < 3) continue;
+      const holes = path.holechildren
+        .map((i) => pathToRing(paths[i]))
+        .filter((ring) => ring.length >= 3);
+      regions.push({ colorIndex, rings: [outer, ...holes] });
+    }
+  });
+
+  return {
+    width: traced.width,
+    height: traced.height,
+    palette: traced.palette,
+    regions,
+    backgroundIndex: findBackground(imageData, traced.palette),
+  };
+}
