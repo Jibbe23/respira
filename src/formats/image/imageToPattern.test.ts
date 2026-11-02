@@ -1,9 +1,23 @@
 import { describe, it, expect } from "vitest";
-import { imageToPattern } from "./imageToPattern";
-import { tatamiFill, runAroundRing, regionArea } from "./fillStitches";
+import { imageToPattern, type ImageToPatternOptions } from "./imageToPattern";
+import { crossStitchRuns } from "./crossStitch";
+import {
+  tatamiFill,
+  runAroundRing,
+  regionArea,
+  repeatClosedRun,
+} from "./fillStitches";
 import { MOVE } from "../import/constants";
 
 type Pixel = [number, number, number, number];
+
+const TATAMI = {
+  fill: "tatami",
+  density: "normal",
+  outlineRepeats: 1,
+  crossSizeMm: 2.5,
+  crossRepeats: 1,
+} satisfies Partial<ImageToPatternOptions>;
 
 // Minimal ImageData stand-in (the tracer only reads width, height and data)
 function makeImage(
@@ -126,7 +140,7 @@ describe("imageToPattern", () => {
       colors: 3,
       widthMm: 60,
       removeBackground: true,
-      density: "normal",
+      ...TATAMI,
     });
     expect(pattern).not.toBeNull();
     const { threads, bounds, stitches } = pattern!;
@@ -149,7 +163,7 @@ describe("imageToPattern", () => {
       colors: 1,
       widthMm: 60,
       removeBackground: true,
-      density: "normal",
+      ...TATAMI,
     });
     expect(pattern!.threads).toHaveLength(1);
   });
@@ -163,7 +177,7 @@ describe("imageToPattern", () => {
       colors: 1,
       widthMm: 40,
       removeBackground: true,
-      density: "normal",
+      ...TATAMI,
     });
     expect(pattern).not.toBeNull();
     expect(pattern!.threads).toHaveLength(1);
@@ -184,7 +198,7 @@ describe("imageToPattern", () => {
       colors: 2,
       widthMm: 30,
       removeBackground: true,
-      density: "normal",
+      ...TATAMI,
     });
     expect(pattern!.threads.map((t) => t.description)).toEqual([
       expect.stringMatching(/RED|CARMINE/i),
@@ -198,8 +212,90 @@ describe("imageToPattern", () => {
         colors: 2,
         widthMm: 50,
         removeBackground: true,
-        density: "normal",
+        ...TATAMI,
       }),
     ).toBeNull();
+  });
+});
+
+describe("repeatClosedRun", () => {
+  const ring = [
+    { x: 0, y: 0 },
+    { x: 10, y: 0 },
+    { x: 0, y: 0 },
+  ];
+
+  it("goes around twice for double", () => {
+    expect(repeatClosedRun(ring, 2)).toHaveLength(5);
+  });
+
+  it("sews every stitch forward, back and forward for triple", () => {
+    expect(repeatClosedRun(ring, 3)).toEqual([
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 0, y: 0 },
+    ]);
+  });
+});
+
+describe("cross stitch", () => {
+  const cell = (col: number, row: number) => ({
+    col,
+    row,
+    colorIndex: 0,
+    x: col * 25,
+    y: row * 25,
+  });
+
+  it("sews a row of cells as / forward and \\ back", () => {
+    const [run] = crossStitchRuns([cell(0, 0), cell(1, 0)], 25, 1);
+    expect(run).toEqual([
+      { x: 0, y: 25 },
+      { x: 25, y: 0 }, // "/" of cell 0
+      { x: 25, y: 25 },
+      { x: 50, y: 0 }, // "/" of cell 1
+      { x: 50, y: 25 },
+      { x: 25, y: 0 }, // "\\" of cell 1
+      { x: 25, y: 25 },
+      { x: 0, y: 0 }, // "\\" of cell 0
+      { x: 0, y: 25 },
+    ]);
+  });
+
+  it("splits rows at gaps and sews more for double and triple", () => {
+    const cells = [cell(0, 0), cell(2, 0)];
+    expect(crossStitchRuns(cells, 25, 1)).toHaveLength(2);
+    const single = crossStitchRuns([cell(0, 0)], 25, 1)[0].length;
+    expect(crossStitchRuns([cell(0, 0)], 25, 2)[0].length).toBe(2 * single - 1);
+    expect(crossStitchRuns([cell(0, 0)], 25, 3)[0].length).toBe(single + 4);
+  });
+
+  it("turns the logo into crosses of the chosen size", () => {
+    const pattern = imageToPattern(logo, {
+      ...TATAMI,
+      fill: "cross",
+      colors: 3,
+      widthMm: 60,
+      removeBackground: true,
+      crossSizeMm: 3,
+    });
+    expect(pattern).not.toBeNull();
+    expect(pattern!.threads).toHaveLength(2);
+    // Every diagonal is a cell diagonal: no stitch longer than 3 mm * sqrt 2
+    const { stitches } = pattern!;
+    for (let i = 1; i < stitches.length; i++) {
+      if (stitches[i][2] !== 0 || stitches[i][3] !== stitches[i - 1][3]) {
+        continue;
+      }
+      const d = Math.hypot(
+        stitches[i][0] - stitches[i - 1][0],
+        stitches[i][1] - stitches[i - 1][1],
+      );
+      expect(d).toBeLessThanOrEqual(30 * Math.SQRT2 + 1.5);
+    }
   });
 });
