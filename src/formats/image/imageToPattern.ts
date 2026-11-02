@@ -24,6 +24,8 @@ import {
 import {
   traceImage,
   quantizePalette,
+  findBackground,
+  binarizeAlpha,
   type RGBA,
   type TracedImage,
 } from "./traceImage";
@@ -89,21 +91,28 @@ function nearestBrotherColor(r: number, g: number, b: number): BrotherColor {
 
 /**
  * Replace palette colors by their Brother thread colors (duplicates removed),
- * so areas that end up in the same thread are traced as one region
+ * so areas that end up in the same thread are traced as one region. The
+ * background (if given) stays first and unchanged, so a foreground color
+ * mapping to the same thread is not swallowed by it.
  */
-function toThreadPalette(palette: RGBA[]): RGBA[] {
+function toThreadPalette(
+  palette: RGBA[],
+  backgroundIndex: number | null,
+): RGBA[] {
   const seen = new Set<string>();
-  const result: RGBA[] = [];
-  for (const c of palette) {
+  const result: RGBA[] =
+    backgroundIndex === null ? [] : [palette[backgroundIndex]];
+  palette.forEach((c, i) => {
+    if (i === backgroundIndex) return;
     if (c.a < 128) {
       result.push(c);
-      continue;
+      return;
     }
     const thread = nearestBrotherColor(c.r, c.g, c.b);
-    if (seen.has(thread.ColorCode)) continue;
+    if (seen.has(thread.ColorCode)) return;
     seen.add(thread.ColorCode);
     result.push({ r: thread.R, g: thread.G, b: thread.B, a: 255 });
-  }
+  });
   return result;
 }
 
@@ -285,11 +294,19 @@ export function imageToPattern(
   options: ImageToPatternOptions,
 ): PesPatternData | null {
   // The background takes a color slot of its own when it is left out
+  const image = binarizeAlpha(imageData);
   const palette = quantizePalette(
-    imageData,
+    image,
     options.colors + (options.removeBackground ? 1 : 0),
   );
-  const traced = traceImage(imageData, toThreadPalette(palette));
+  const background = options.removeBackground
+    ? findBackground(image, palette)
+    : null;
+  const traced = traceImage(
+    image,
+    toThreadPalette(palette, background),
+    background === null ? null : 0,
+  );
   const groups = groupByThread(traced, options);
   const stitches = groupsToStitches(groups, options.density);
   if (stitches.length < 2) return null;

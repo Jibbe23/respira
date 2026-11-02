@@ -340,7 +340,7 @@ export function ImageToEmbroideryDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleApply} disabled={!pattern}>
+          <Button onClick={handleApply} disabled={!pattern || tooLarge}>
             <PhotoIcon />
             Use pattern
           </Button>

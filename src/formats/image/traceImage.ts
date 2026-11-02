@@ -23,7 +23,7 @@ export interface TracedImage {
   height: number;
   palette: RGBA[];
   regions: TracedRegion[];
-  backgroundIndex: number | null; // most common border color, if dominant
+  backgroundIndex: number | null; // palette entry of the background, if any
 }
 
 interface TraceSegment {
@@ -159,6 +159,7 @@ function nearestPaletteIndex(palette: RGBA[], r: number, g: number, b: number) {
   let best = 0;
   let bestDistance = Infinity;
   palette.forEach((c, i) => {
+    if (c.a < 128) return; // the transparent entry is not a color
     const d = (c.r - r) ** 2 + (c.g - g) ** 2 + (c.b - b) ** 2;
     if (d < bestDistance) {
       bestDistance = d;
@@ -169,7 +170,10 @@ function nearestPaletteIndex(palette: RGBA[], r: number, g: number, b: number) {
 }
 
 /** Palette color covering most of the image border, if it dominates */
-function findBackground(imageData: ImageData, palette: RGBA[]): number | null {
+export function findBackground(
+  imageData: ImageData,
+  palette: RGBA[],
+): number | null {
   const { width, height, data } = imageData;
   const counts = new Array<number>(palette.length).fill(0);
   let total = 0;
@@ -196,8 +200,34 @@ function findBackground(imageData: ImageData, palette: RGBA[]): number | null {
  * Trace an image into colored regions
  *
  * @param palette - colors to map the pixels to (see quantizePalette)
+ * @param backgroundIndex - palette entry that is the background, if any
  */
-export function traceImage(imageData: ImageData, palette: RGBA[]): TracedImage {
+/**
+ * Copy of the image with alpha set to fully transparent or fully opaque, so
+ * half-transparent pixels are traced the same way the palette treats them
+ */
+export function binarizeAlpha(imageData: ImageData): ImageData {
+  const data = new Uint8ClampedArray(imageData.data);
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 128) {
+      data[i] = data[i + 1] = data[i + 2] = data[i + 3] = 0;
+    } else {
+      data[i + 3] = 255;
+    }
+  }
+  return {
+    width: imageData.width,
+    height: imageData.height,
+    data,
+    colorSpace: imageData.colorSpace,
+  } as ImageData;
+}
+
+export function traceImage(
+  imageData: ImageData,
+  palette: RGBA[],
+  backgroundIndex: number | null,
+): TracedImage {
   const traced = ImageTracer.imagedataToTracedata(imageData, {
     // Copy: the tracer keeps a reference and may average it
     pal: palette.map((c) => ({ ...c })),
@@ -234,6 +264,6 @@ export function traceImage(imageData: ImageData, palette: RGBA[]): TracedImage {
     height: traced.height,
     palette: traced.palette,
     regions,
-    backgroundIndex: findBackground(imageData, traced.palette),
+    backgroundIndex,
   };
 }

@@ -154,6 +154,43 @@ describe("imageToPattern", () => {
     expect(pattern!.threads).toHaveLength(1);
   });
 
+  it("keeps a white logo on an off-white background", () => {
+    const offWhite: Pixel = [236, 236, 230, 255];
+    const image = makeImage(80, 80, (x, y) =>
+      (x - 40) ** 2 + (y - 40) ** 2 < 25 ** 2 ? WHITE : offWhite,
+    );
+    const pattern = imageToPattern(image, {
+      colors: 1,
+      widthMm: 40,
+      removeBackground: true,
+      density: "normal",
+    });
+    expect(pattern).not.toBeNull();
+    expect(pattern!.threads).toHaveLength(1);
+    // Only the circle is sewn: about 40 mm wide
+    const { minX, maxX } = pattern!.bounds;
+    expect(Math.abs(maxX - minX - 400)).toBeLessThanOrEqual(10);
+  });
+
+  it("does not sew half-transparent pixels", () => {
+    const glow: Pixel = [255, 255, 255, 100];
+    const image = makeImage(80, 80, (x, y) => {
+      const d = (x - 40) ** 2 + (y - 40) ** 2;
+      if (d < 15 ** 2) return RED;
+      if (d < 30 ** 2) return glow;
+      return [0, 0, 0, 0];
+    });
+    const pattern = imageToPattern(image, {
+      colors: 2,
+      widthMm: 30,
+      removeBackground: true,
+      density: "normal",
+    });
+    expect(pattern!.threads.map((t) => t.description)).toEqual([
+      expect.stringMatching(/RED|CARMINE/i),
+    ]);
+  });
+
   it("returns null when only the background is left", () => {
     const blank = makeImage(40, 40, () => WHITE);
     expect(
