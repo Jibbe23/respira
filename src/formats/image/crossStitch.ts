@@ -76,8 +76,9 @@ export function crossStitchGrid(
 
   const contentWidth = maxX - minX + 1;
   const contentHeight = maxY - minY + 1;
-  const cellPx = (cellSize * contentWidth) / width;
-  const cols = Math.max(1, Math.round(contentWidth / cellPx));
+  // Whole cells that fit into the width; square cells in the image
+  const cols = Math.max(1, Math.floor(width / cellSize));
+  const cellPx = contentWidth / cols;
   const rows = Math.max(1, Math.round(contentHeight / cellPx));
   const originX = (-cols * cellSize) / 2;
   const originY = (-rows * cellSize) / 2;

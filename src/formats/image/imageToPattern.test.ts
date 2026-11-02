@@ -285,6 +285,9 @@ describe("cross stitch", () => {
     });
     expect(pattern).not.toBeNull();
     expect(pattern!.threads).toHaveLength(2);
+    // Never wider than asked for (lock stitches add a few tenths of a mm)
+    const { minX, maxX } = pattern!.bounds;
+    expect(maxX - minX).toBeLessThanOrEqual(600 + 5);
     // Every diagonal is a cell diagonal: no stitch longer than 3 mm * sqrt 2
     const { stitches } = pattern!;
     for (let i = 1; i < stitches.length; i++) {
