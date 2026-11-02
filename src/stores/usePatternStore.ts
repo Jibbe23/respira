@@ -3,13 +3,25 @@ import { useShallow } from "zustand/react/shallow";
 import type { PesPatternData } from "../formats/import/pesImporter";
 import { onPatternDeleted } from "./storeEvents";
 import { calculatePatternCenter } from "../components/PatternCanvas/patternCanvasHelpers";
-import { calculateRotatedBounds } from "../utils/rotationUtils";
+import { calculateRotatedBounds, normalizeAngle } from "../utils/rotationUtils";
+import {
+  applyPatternGeometry,
+  clampPatternScale,
+  offsetKeepingPivot,
+  rotationAfterMirror,
+  type MirrorAxis,
+} from "../utils/patternGeometry";
 
 // Conditional logging for development only
 const isDev = import.meta.env.DEV;
 
 interface PatternState {
-  // Original pattern (pre-upload)
+  // Pattern as loaded from the file (before scale/mirror)
+  sourcePesData: PesPatternData | null;
+  patternScale: number; // uniform scale factor (1 = original size)
+  patternMirrored: boolean; // mirrored horizontally in pattern coordinates
+
+  // Original pattern (pre-upload), scale and mirroring baked in
   pesData: PesPatternData | null;
   currentFileName: string;
   patternOffset: { x: number; y: number };
@@ -25,6 +37,10 @@ interface PatternState {
   setPattern: (data: PesPatternData, fileName: string) => void;
   setPatternOffset: (x: number, y: number) => void;
   setPatternRotation: (rotation: number) => void;
+  rotatePatternBy: (degrees: number) => void;
+  setPatternScale: (scale: number) => void;
+  mirrorPattern: (axis: MirrorAxis) => void;
+  resetPatternTransform: () => void;
   setUploadedPattern: (
     uploadedData: PesPatternData,
     uploadedOffset: { x: number; y: number },
@@ -53,8 +69,44 @@ export interface TransformedBounds {
   center: PatternCenter;
 }
 
-export const usePatternStore = create<PatternState>((set) => ({
+/**
+ * State update for new scale/mirror/rotation values: recalculates the pattern
+ * from the source and keeps the source center at the same place on screen
+ */
+function withGeometry(
+  state: PatternState,
+  patternScale: number,
+  patternMirrored: boolean,
+  patternRotation: number,
+): Partial<PatternState> {
+  const { sourcePesData, pesData } = state;
+  if (!sourcePesData || !pesData) return {};
+
+  const newPesData = applyPatternGeometry(
+    sourcePesData,
+    patternScale,
+    patternMirrored,
+  );
+
+  return {
+    patternScale,
+    patternMirrored,
+    patternRotation,
+    pesData: newPesData,
+    patternOffset: offsetKeepingPivot(
+      state.patternOffset,
+      calculatePatternCenter(sourcePesData.bounds),
+      { bounds: pesData.bounds, rotation: state.patternRotation },
+      { bounds: newPesData.bounds, rotation: patternRotation },
+    ),
+  };
+}
+
+export const usePatternStore = create<PatternState>((set, get) => ({
   // Initial state - original pattern
+  sourcePesData: null,
+  patternScale: 1,
+  patternMirrored: false,
   pesData: null,
   currentFileName: "",
   patternOffset: { x: 0, y: 0 },
@@ -69,6 +121,9 @@ export const usePatternStore = create<PatternState>((set) => ({
   // Set pattern data and filename (replaces current pattern)
   setPattern: (data: PesPatternData, fileName: string) => {
     set({
+      sourcePesData: data,
+      patternScale: 1,
+      patternMirrored: false,
       pesData: data,
       currentFileName: fileName,
       patternOffset: { x: 0, y: 0 },
@@ -90,6 +145,43 @@ export const usePatternStore = create<PatternState>((set) => ({
     if (isDev) {
       console.log("[PatternStore] Pattern rotation changed:", rotation);
     }
+  },
+
+  // Rotate by a fixed step (e.g. the 90°/180° buttons)
+  rotatePatternBy: (degrees: number) => {
+    set({ patternRotation: normalizeAngle(get().patternRotation + degrees) });
+  },
+
+  // Scale uniformly; stitches are recalculated from the source pattern so
+  // repeated scaling does not accumulate rounding errors
+  setPatternScale: (scale: number) => {
+    const { patternMirrored, patternRotation } = get();
+    set(
+      withGeometry(
+        get(),
+        clampPatternScale(scale),
+        patternMirrored,
+        patternRotation,
+      ),
+    );
+  },
+
+  // Mirror along the screen axis, taking the current rotation into account
+  mirrorPattern: (axis: MirrorAxis) => {
+    const { patternScale, patternMirrored, patternRotation } = get();
+    set(
+      withGeometry(
+        get(),
+        patternScale,
+        !patternMirrored,
+        rotationAfterMirror(patternRotation, axis),
+      ),
+    );
+  },
+
+  // Back to the pattern as loaded (size, mirroring and rotation)
+  resetPatternTransform: () => {
+    set(withGeometry(get(), 1, false, 0));
   },
 
   // Set uploaded pattern data (called after upload completes)

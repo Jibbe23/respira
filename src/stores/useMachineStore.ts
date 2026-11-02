@@ -65,7 +65,8 @@ interface MachineState {
   startSewing: () => Promise<void>;
   resumeSewing: () => Promise<void>;
   deletePattern: () => Promise<void>;
-  setStitchPosition: (index: number, maxStitches?: number) => Promise<void>;
+  // Resolves to false if the position could not be set
+  setStitchPosition: (index: number, maxStitches?: number) => Promise<boolean>;
   adjustStitchPosition: (offset: number, maxStitches?: number) => Promise<void>;
 
   // Initialization
@@ -158,6 +159,10 @@ export const useMachineStore = create<MachineState>((set, get) => ({
         machineStatusName: MachineStatusNames[MachineStatus.None] || "Unknown",
         patternInfo: null,
         sewingProgress: null,
+        // Step control positions belong to the pattern that is gone now
+        adjustedStitchIndex: null,
+        pausedStitchIndex: null,
+        lastRolledBackError: null,
         error: null,
         machineError: SewingMachineError.None,
       });
@@ -322,6 +327,10 @@ export const useMachineStore = create<MachineState>((set, get) => ({
       set({
         patternInfo: null,
         sewingProgress: null,
+        // Step control positions belong to the pattern that is gone now
+        adjustedStitchIndex: null,
+        pausedStitchIndex: null,
+        lastRolledBackError: null,
       });
 
       // Emit pattern deleted event for other stores to react
@@ -340,7 +349,7 @@ export const useMachineStore = create<MachineState>((set, get) => ({
   // Set stitch position to an absolute index
   setStitchPosition: async (index: number, maxStitches?: number) => {
     const { isConnected, service, patternInfo } = get();
-    if (!isConnected) return;
+    if (!isConnected) return false;
 
     const totalStitches = maxStitches ?? patternInfo?.totalStitches ?? 0;
     const clamped = Math.max(0, Math.min(index, totalStitches));
@@ -350,11 +359,13 @@ export const useMachineStore = create<MachineState>((set, get) => ({
       set({ adjustedStitchIndex: clamped });
       // Refresh progress so UI reflects the new position
       await get().refreshProgress();
+      return true;
     } catch (err) {
       set({
         error:
           err instanceof Error ? err.message : "Failed to set stitch position",
       });
+      return false;
     }
   },
 
@@ -421,6 +432,10 @@ export const useMachineStore = create<MachineState>((set, get) => ({
         machineError: SewingMachineError.None,
         patternInfo: null,
         sewingProgress: null,
+        // Step control positions belong to the pattern that is gone now
+        adjustedStitchIndex: null,
+        pausedStitchIndex: null,
+        lastRolledBackError: null,
         error: "Device disconnected",
         isPairingError: false,
       });

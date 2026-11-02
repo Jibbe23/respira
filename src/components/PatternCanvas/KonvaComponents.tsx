@@ -151,6 +151,7 @@ interface StitchesProps {
   pesData: PesPatternData;
   currentStitchIndex: number;
   showProgress?: boolean;
+  incompleteOpacity?: number; // opacity of not yet sewn stitches (default 0.3, jumps 0.5)
 }
 
 export const Stitches = memo(
@@ -159,6 +160,7 @@ export const Stitches = memo(
     pesData,
     currentStitchIndex,
     showProgress = false,
+    incompleteOpacity,
   }: StitchesProps) => {
     // PERFORMANCE OPTIMIZATION:
     // Separate static group structure (doesn't change during sewing)
@@ -273,7 +275,8 @@ export const Stitches = memo(
             const isCompleted = absoluteIndex < currentStitchIndex;
 
             if (!currentSubGroup || currentSubGroup.completed !== isCompleted) {
-              if (staticGroup.isJump && i > 0) {
+              // Start at the previous point so the stitch at the split is drawn
+              if (i > 0) {
                 currentSubGroup = {
                   color: staticGroup.color,
                   points: [prevX, prevY, x, y],
@@ -325,9 +328,9 @@ export const Stitches = memo(
               group.isJump
                 ? group.completed
                   ? 0.8
-                  : 0.5
+                  : (incompleteOpacity ?? 0.5)
                 : showProgress && !group.completed
-                  ? 0.3
+                  ? (incompleteOpacity ?? 0.3)
                   : 1.0
             }
           />
@@ -342,7 +345,8 @@ export const Stitches = memo(
       prevProps.stitches === nextProps.stitches &&
       prevProps.pesData === nextProps.pesData &&
       prevProps.currentStitchIndex === nextProps.currentStitchIndex &&
-      prevProps.showProgress === nextProps.showProgress
+      prevProps.showProgress === nextProps.showProgress &&
+      prevProps.incompleteOpacity === nextProps.incompleteOpacity
     );
   },
 );

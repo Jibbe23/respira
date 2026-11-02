@@ -1,0 +1,219 @@
+/**
+ * PatternTransformControls Component
+ *
+ * Toolbar for quick pattern transforms before upload:
+ * rotate in 90°/180° steps, mirror, scale in steps and reset
+ */
+
+import {
+  ArrowUturnLeftIcon,
+  ArrowUturnRightIcon,
+  ArrowsRightLeftIcon,
+  ArrowsUpDownIcon,
+  MinusIcon,
+  PlusIcon,
+  ArrowPathIcon,
+  ExclamationTriangleIcon,
+} from "@heroicons/react/24/solid";
+import { useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  clampPatternScale,
+  MIN_PATTERN_SCALE,
+  MAX_PATTERN_SCALE,
+  SAFE_SCALE_RANGE,
+  type MirrorAxis,
+} from "../../utils/patternGeometry";
+
+const SCALE_STEP = 0.05;
+
+interface PatternTransformControlsProps {
+  scale: number;
+  rotation: number;
+  mirrored: boolean;
+  onRotateBy: (degrees: number) => void;
+  onMirror: (axis: MirrorAxis) => void;
+  onScale: (scale: number) => void;
+  onReset: () => void;
+}
+
+export function PatternTransformControls({
+  scale,
+  rotation,
+  mirrored,
+  onRotateBy,
+  onMirror,
+  onScale,
+  onReset,
+}: PatternTransformControlsProps) {
+  const percent = Math.round(scale * 100);
+
+  // Text in the percent field while typing; follows the scale when it changes
+  // elsewhere (buttons, corner handles). Adjusted during render (React docs pattern)
+  const [percentDraft, setPercentDraft] = useState(String(percent));
+  const [prevPercent, setPrevPercent] = useState(percent);
+  if (prevPercent !== percent) {
+    setPrevPercent(percent);
+    setPercentDraft(String(percent));
+  }
+
+  const cancelCommitRef = useRef(false);
+
+  const commitPercent = () => {
+    if (cancelCommitRef.current) {
+      cancelCommitRef.current = false;
+      setPercentDraft(String(percent));
+      return;
+    }
+    // Unchanged text: keep a dragged scale like 102.34 % as it is
+    if (percentDraft === String(percent)) return;
+    const value = Number.parseFloat(percentDraft.replace(",", "."));
+    if (Number.isFinite(value) && value > 0) {
+      const next = clampPatternScale(value / 100);
+      onScale(next);
+      // Show the clamped value even if the rounded percent did not change
+      setPercentDraft(String(Math.round(next * 100)));
+    } else {
+      setPercentDraft(String(percent));
+    }
+  };
+
+  const isTransformed = scale !== 1 || rotation !== 0 || mirrored;
+  const outsideSafeRange =
+    scale < SAFE_SCALE_RANGE.min || scale > SAFE_SCALE_RANGE.max;
+
+  // Step to the next multiple of 5% in the given direction
+  // (a dragged scale like 102% goes to 105% or 100%)
+  const stepScale = (direction: 1 | -1) => {
+    const steps = scale / SCALE_STEP;
+    const next =
+      direction > 0
+        ? Math.floor(steps + 1e-6) + 1
+        : Math.ceil(steps - 1e-6) - 1;
+    onScale(next * SCALE_STEP);
+  };
+
+  return (
+    <div className="flex flex-col gap-1 mb-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Button
+          variant="outline"
+          size="icon-sm"
+          onClick={() => onRotateBy(-90)}
+          title="Rotate 90° counter-clockwise"
+        >
+          <ArrowUturnLeftIcon />
+        </Button>
+        <Button
+          variant="outline"
+          size="icon-sm"
+          onClick={() => onRotateBy(90)}
+          title="Rotate 90° clockwise"
+        >
+          <ArrowUturnRightIcon />
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 px-2 text-xs"
+          onClick={() => onRotateBy(180)}
+          title="Rotate 180°"
+        >
+          180°
+        </Button>
+
+        <span className="w-px h-6 bg-gray-300 dark:bg-gray-600 mx-0.5" />
+
+        <Button
+          variant="outline"
+          size="icon-sm"
+          onClick={() => onMirror("horizontal")}
+          title="Mirror horizontally"
+        >
+          <ArrowsRightLeftIcon />
+        </Button>
+        <Button
+          variant="outline"
+          size="icon-sm"
+          onClick={() => onMirror("vertical")}
+          title="Mirror vertically"
+        >
+          <ArrowsUpDownIcon />
+        </Button>
+
+        <span className="w-px h-6 bg-gray-300 dark:bg-gray-600 mx-0.5" />
+
+        <Button
+          variant="outline"
+          size="icon-sm"
+          onClick={() => stepScale(-1)}
+          disabled={scale <= MIN_PATTERN_SCALE}
+          title="Smaller"
+        >
+          <MinusIcon />
+        </Button>
+        <label
+          className="flex items-center text-sm font-semibold text-gray-900 dark:text-gray-100"
+          title="Pattern size in percent (or drag the corner handles)"
+        >
+          <input
+            type="text"
+            inputMode="numeric"
+            aria-label="Pattern size in percent"
+            value={percentDraft}
+            onChange={(e) => setPercentDraft(e.target.value)}
+            onBlur={commitPercent}
+            onKeyDown={(e) => {
+              // Leaving the field commits (onBlur); Escape skips that once
+              if (e.key === "Enter") {
+                e.currentTarget.blur();
+              } else if (e.key === "Escape") {
+                cancelCommitRef.current = true;
+                e.currentTarget.blur();
+              }
+            }}
+            className="w-12 h-8 px-1 text-right bg-transparent border border-gray-300 dark:border-gray-600 rounded-md outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+          />
+          <span className="ml-0.5">%</span>
+        </label>
+        <Button
+          variant="outline"
+          size="icon-sm"
+          onClick={() => stepScale(1)}
+          disabled={scale >= MAX_PATTERN_SCALE}
+          title="Larger"
+        >
+          <PlusIcon />
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 px-2 text-xs"
+          onClick={() => onScale(1)}
+          disabled={scale === 1}
+          title="Reset size to 100%"
+        >
+          100%
+        </Button>
+
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={onReset}
+          disabled={!isTransformed}
+          title="Reset size, rotation and mirroring"
+        >
+          <ArrowPathIcon />
+        </Button>
+      </div>
+
+      {outsideSafeRange && (
+        <p className="flex items-center gap-1 text-xs text-warning-700 dark:text-warning-400 m-0">
+          <ExclamationTriangleIcon className="w-3.5 h-3.5 flex-shrink-0" />
+          The stitch count is adjusted, but fill and satin density still change
+          with the size. Check the result before sewing.
+        </p>
+      )}
+    </div>
+  );
+}

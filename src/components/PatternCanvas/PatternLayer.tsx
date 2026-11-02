@@ -2,10 +2,11 @@
  * PatternLayer Component
  *
  * Unified component for rendering pattern layers (both original and uploaded)
- * Handles both interactive (draggable/rotatable) and locked states
+ * Handles both interactive (draggable/rotatable/scalable) and locked states
+ * and the stitch-by-stitch preview
  */
 
-import { useMemo, memo, type RefObject } from "react";
+import { useEffect, useMemo, memo, type RefObject } from "react";
 import { Group, Transformer } from "react-konva";
 import type Konva from "konva";
 import type { KonvaEventObject } from "konva/lib/Node";
@@ -23,6 +24,7 @@ interface PatternLayerProps {
   isInteractive: boolean;
   showProgress?: boolean;
   currentStitchIndex?: number;
+  previewStitchIndex?: number | null; // stitch preview position, null = off
   patternGroupRef?: RefObject<Konva.Group | null>;
   transformerRef?: RefObject<Konva.Transformer | null>;
   onDragEnd?: (e: Konva.KonvaEventObject<DragEvent>) => void;
@@ -37,6 +39,7 @@ export const PatternLayer = memo(function PatternLayer({
   isInteractive,
   showProgress = false,
   currentStitchIndex = 0,
+  previewStitchIndex = null,
   patternGroupRef,
   transformerRef,
   onDragEnd,
@@ -55,6 +58,17 @@ export const PatternLayer = memo(function PatternLayer({
     () => convertPenStitchesToPesFormat(pesData.penStitches),
     [pesData.penStitches],
   );
+
+  // The stitch preview overrides the sewing progress display
+  const isPreview = previewStitchIndex !== null;
+  const displayStitchIndex = isPreview
+    ? previewStitchIndex
+    : currentStitchIndex;
+
+  // The group's size changes when frames are hidden for the preview
+  useEffect(() => {
+    transformerRef?.current?.forceUpdate();
+  }, [isPreview, transformerRef]);
 
   const groupName = isInteractive ? "pattern-group" : "uploaded-pattern-group";
 
@@ -79,7 +93,7 @@ export const PatternLayer = memo(function PatternLayer({
               }
             : undefined
         }
-        draggable={isInteractive}
+        draggable={isInteractive && !isPreview}
         x={offset.x}
         y={offset.y}
         offsetX={center.x}
@@ -106,10 +120,19 @@ export const PatternLayer = memo(function PatternLayer({
         <Stitches
           stitches={stitches}
           pesData={pesData}
-          currentStitchIndex={currentStitchIndex}
-          showProgress={showProgress}
+          currentStitchIndex={displayStitchIndex}
+          showProgress={showProgress || isPreview}
+          incompleteOpacity={isPreview ? 0.08 : undefined}
         />
-        <PatternBounds bounds={pesData.bounds} />
+        {/* Frames would hide stitches on the pattern edge during the preview */}
+        {!isPreview && <PatternBounds bounds={pesData.bounds} />}
+        {/* Inside the group so the marker follows rotation */}
+        {isPreview && (
+          <CurrentPosition
+            currentStitchIndex={displayStitchIndex}
+            stitches={stitches}
+          />
+        )}
       </Group>
 
       {/* Transformer only for interactive layer */}
@@ -124,7 +147,16 @@ export const PatternLayer = memo(function PatternLayer({
               attachTransformer();
             }
           }}
-          enabledAnchors={[]}
+          enabledAnchors={[
+            "top-left",
+            "top-right",
+            "bottom-left",
+            "bottom-right",
+          ]}
+          visible={!isPreview}
+          keepRatio={true}
+          centeredScaling={true}
+          flipEnabled={false}
           rotateEnabled={true}
           borderEnabled={true}
           borderStroke="#FF6B6B"
@@ -136,14 +168,22 @@ export const PatternLayer = memo(function PatternLayer({
       )}
 
       {/* Current position indicator (only for uploaded pattern with progress) */}
-      {!isInteractive && showProgress && currentStitchIndex > 0 && (
-        <Group x={offset.x} y={offset.y} offsetX={center.x} offsetY={center.y}>
-          <CurrentPosition
-            currentStitchIndex={currentStitchIndex}
-            stitches={stitches}
-          />
-        </Group>
-      )}
+      {!isPreview &&
+        !isInteractive &&
+        showProgress &&
+        currentStitchIndex > 0 && (
+          <Group
+            x={offset.x}
+            y={offset.y}
+            offsetX={center.x}
+            offsetY={center.y}
+          >
+            <CurrentPosition
+              currentStitchIndex={currentStitchIndex}
+              stitches={stitches}
+            />
+          </Group>
+        )}
     </>
   );
 });
