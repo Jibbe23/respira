@@ -259,3 +259,18 @@ export function runAroundRing(
   }
   return points;
 }
+
+/**
+ * Sew a closed run (first point = last point) several times: twice goes
+ * around twice, three times sews every stitch forward, back and forward
+ * again (bean stitch), which gives a bold line
+ */
+export function repeatClosedRun(points: Point[], repeats: 1 | 2 | 3): Point[] {
+  if (repeats === 1 || points.length < 2) return points;
+  if (repeats === 2) return [...points, ...points.slice(1)];
+  const result: Point[] = [points[0]];
+  for (let i = 1; i < points.length; i++) {
+    result.push(points[i], points[i - 1], points[i]);
+  }
+  return result;
+}

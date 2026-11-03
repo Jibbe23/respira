@@ -2,11 +2,12 @@
  * ImageToEmbroideryDialog Component
  *
  * Turns an image (logo, clipart, drawing, photo) into a stitch pattern:
- * choose the number of thread colors, the size and the fill density,
+ * choose the number of thread colors, the size, the fill (tatami or cross
+ * stitch) and how often lines are sewn,
  * check the preview and use the result like a loaded PES file.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PhotoIcon } from "@heroicons/react/24/solid";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,9 @@ import { loadImageData } from "../../formats/image/loadImage";
 import {
   imageToPattern,
   type FillDensity,
+  type FillType,
+  type ImageToPatternOptions,
+  type Repeats,
 } from "../../formats/image/imageToPattern";
 
 const MAX_COLORS = 12;
@@ -41,8 +45,36 @@ interface ImageToEmbroideryDialogProps {
 /** Result of one conversion, tagged with the image and settings it used */
 interface Conversion {
   source: { imageData: ImageData; name: string };
-  settingsKey: string;
+  options: ImageToPatternOptions;
   result: { pattern: PesPatternData | null } | { error: string };
+}
+
+const CROSS_SIZES_MM = [2, 2.5, 3, 4];
+const SELECT_CLASS =
+  "h-8 px-2 bg-transparent border border-gray-300 dark:border-gray-600 rounded-md";
+
+/** Single / double / triple choice for outlines and crosses */
+function RepeatsSelect({
+  value,
+  onChange,
+  label,
+}: {
+  value: Repeats;
+  onChange: (value: Repeats) => void;
+  label: string;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(Number(e.target.value) as Repeats)}
+      aria-label={label}
+      className={SELECT_CLASS}
+    >
+      <option value={1}>Single</option>
+      <option value={2}>Double</option>
+      <option value={3}>Triple</option>
+    </select>
+  );
 }
 
 /** Draw the stitches (no jumps) in their thread colors */
@@ -88,7 +120,11 @@ export function ImageToEmbroideryDialog({
     Math.round(Math.min(hoopWidthMm, hoopHeightMm) * 0.8),
   );
   const [removeBackground, setRemoveBackground] = useState(true);
+  const [fill, setFill] = useState<FillType>("tatami");
   const [density, setDensity] = useState<FillDensity>("normal");
+  const [outlineRepeats, setOutlineRepeats] = useState<Repeats>(1);
+  const [crossSizeMm, setCrossSizeMm] = useState(2.5);
+  const [crossRepeats, setCrossRepeats] = useState<Repeats>(1);
   const [conversion, setConversion] = useState<Conversion | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const loadIdRef = useRef(0);
@@ -98,7 +134,28 @@ export function ImageToEmbroideryDialog({
     hoopWidthMm,
     Math.max(MIN_WIDTH_MM, Number.isFinite(widthMm) ? widthMm : 0),
   );
-  const settingsKey = `${colors}|${width}|${removeBackground}|${density}`;
+  const options = useMemo<ImageToPatternOptions>(
+    () => ({
+      colors,
+      widthMm: width,
+      removeBackground,
+      fill,
+      density,
+      outlineRepeats,
+      crossSizeMm,
+      crossRepeats,
+    }),
+    [
+      colors,
+      width,
+      removeBackground,
+      fill,
+      density,
+      outlineRepeats,
+      crossSizeMm,
+      crossRepeats,
+    ],
+  );
 
   const handleFile = async (selected: File | undefined) => {
     if (!selected) return;
@@ -132,19 +189,14 @@ export function ImageToEmbroideryDialog({
         let result: Conversion["result"];
         try {
           result = {
-            pattern: imageToPattern(source.imageData, {
-              colors,
-              widthMm: width,
-              removeBackground,
-              density,
-            }),
+            pattern: imageToPattern(source.imageData, options),
           };
         } catch (err) {
           result = {
             error: err instanceof Error ? err.message : "Conversion failed",
           };
         }
-        if (!cancelled) setConversion({ source, settingsKey, result });
+        if (!cancelled) setConversion({ source, options, result });
       }, 0);
     }, CONVERT_DELAY_MS);
     return () => {
@@ -152,13 +204,11 @@ export function ImageToEmbroideryDialog({
       clearTimeout(timer);
       clearTimeout(inner);
     };
-  }, [source, settingsKey, colors, width, removeBackground, density]);
+  }, [source, options]);
 
   // Only a result for the current image and settings counts
   const current =
-    conversion &&
-    conversion.source === source &&
-    conversion.settingsKey === settingsKey
+    conversion && conversion.source === source && conversion.options === options
       ? conversion.result
       : null;
   const isWorking = !!source && !current;
@@ -245,7 +295,7 @@ export function ImageToEmbroideryDialog({
                 value={widthMm}
                 onChange={(e) => setWidthMm(Number(e.target.value))}
                 aria-label="Width in millimetres"
-                className="h-8 w-24 px-2 bg-transparent border border-gray-300 dark:border-gray-600 rounded-md"
+                className={`${SELECT_CLASS} w-24`}
               />
             </label>
 
@@ -259,17 +309,68 @@ export function ImageToEmbroideryDialog({
             </label>
 
             <label className="flex items-center gap-2">
-              <span>Fill density</span>
+              <span>Fill</span>
               <select
-                value={density}
-                onChange={(e) => setDensity(e.target.value as FillDensity)}
-                aria-label="Fill density"
-                className="h-8 px-2 bg-transparent border border-gray-300 dark:border-gray-600 rounded-md"
+                value={fill}
+                onChange={(e) => setFill(e.target.value as FillType)}
+                aria-label="Fill type"
+                className={SELECT_CLASS}
               >
-                <option value="normal">Normal</option>
-                <option value="dense">Dense</option>
+                <option value="tatami">Fill (smooth areas)</option>
+                <option value="cross">Cross stitch</option>
               </select>
             </label>
+
+            {fill === "tatami" ? (
+              <>
+                <label className="flex items-center gap-2">
+                  <span>Fill density</span>
+                  <select
+                    value={density}
+                    onChange={(e) => setDensity(e.target.value as FillDensity)}
+                    aria-label="Fill density"
+                    className={SELECT_CLASS}
+                  >
+                    <option value="normal">Normal</option>
+                    <option value="dense">Dense</option>
+                  </select>
+                </label>
+                <label className="flex items-center gap-2">
+                  <span>Outline</span>
+                  <RepeatsSelect
+                    value={outlineRepeats}
+                    onChange={setOutlineRepeats}
+                    label="Outline"
+                  />
+                </label>
+              </>
+            ) : (
+              <>
+                <label className="flex items-center gap-2">
+                  <span>Cross size</span>
+                  <select
+                    value={crossSizeMm}
+                    onChange={(e) => setCrossSizeMm(Number(e.target.value))}
+                    aria-label="Cross size"
+                    className={SELECT_CLASS}
+                  >
+                    {CROSS_SIZES_MM.map((size) => (
+                      <option key={size} value={size}>
+                        {size} mm
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex items-center gap-2">
+                  <span>Cross</span>
+                  <RepeatsSelect
+                    value={crossRepeats}
+                    onChange={setCrossRepeats}
+                    label="Cross"
+                  />
+                </label>
+              </>
+            )}
           </div>
 
           {imageUrl && (

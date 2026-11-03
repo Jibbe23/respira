@@ -15,8 +15,14 @@ import {
   type BrotherColor,
 } from "../../utils/brotherColors";
 import {
+  crossStitchGrid,
+  crossStitchRuns,
+  type CrossCell,
+} from "./crossStitch";
+import {
   tatamiFill,
   runAroundRing,
+  repeatClosedRun,
   regionArea,
   type Point,
   type Ring,
@@ -31,12 +37,19 @@ import {
 } from "./traceImage";
 
 export type FillDensity = "normal" | "dense";
+export type FillType = "tatami" | "cross";
+/** How often a line is sewn: 1 = single, 2 = double, 3 = triple */
+export type Repeats = 1 | 2 | 3;
 
 export interface ImageToPatternOptions {
-  colors: number; // colors to reduce the image to (before thread matching)
+  colors: number; // maximum number of thread colors
   widthMm: number; // width of the embroidery
   removeBackground: boolean; // skip the dominant border color
-  density: FillDensity;
+  fill: FillType;
+  density: FillDensity; // tatami row spacing
+  outlineRepeats: Repeats; // tatami outline around each area
+  crossSizeMm: number; // cross stitch cell size
+  crossRepeats: Repeats; // how often each cross is sewn
 }
 
 /** Stitch parameters (0.1 mm units) */
@@ -116,24 +129,65 @@ function toThreadPalette(
   return result;
 }
 
-interface ThreadGroup {
+interface ThreadGroup<T> {
   color: BrotherColor;
-  regions: Ring[][]; // scaled regions (0.1 mm)
+  items: T[]; // what is sewn in this thread (regions or cross cells)
   area: number;
 }
 
 /**
- * Group traced regions by thread color, scaled to the target width and
- * centered on the origin. Palette colors that map to the same Brother thread
- * are merged so they need no extra thread change.
+ * Merge the smallest group into the one with the closest color while there
+ * are more threads than asked for, or a thread would only sew tiny bits
+ * (e.g. anti-aliased edges). Returns large areas first, details on top.
  */
-function groupByThread(
+function mergeGroups<T>(
+  groups: ThreadGroup<T>[],
+  maxColors: number,
+): ThreadGroup<T>[] {
+  const list = [...groups];
+  const total = list.reduce((sum, g) => sum + g.area, 0);
+  const smallestArea = () => Math.min(...list.map((g) => g.area));
+  while (
+    list.length > 1 &&
+    (list.length > maxColors || smallestArea() < total * MIN_THREAD_SHARE)
+  ) {
+    list.sort((a, b) => b.area - a.area);
+    const smallest = list.pop()!;
+    const target = list.reduce((best, g) =>
+      colorDistance(g.color, smallest.color) <
+      colorDistance(best.color, smallest.color)
+        ? g
+        : best,
+    );
+    target.items.push(...smallest.items);
+    target.area += smallest.area;
+  }
+  return list.sort((a, b) => b.area - a.area);
+}
+
+/** Add an item to the group of its thread color */
+function addToGroup<T>(
+  groups: Map<string, ThreadGroup<T>>,
+  color: BrotherColor,
+  item: T,
+  area: number,
+) {
+  const group = groups.get(color.ColorCode) ?? { color, items: [], area: 0 };
+  group.items.push(item);
+  group.area += area;
+  groups.set(color.ColorCode, group);
+}
+
+/**
+ * Group traced regions by thread color, scaled to the target width and
+ * centered on the origin
+ */
+function groupRegionsByThread(
   traced: TracedImage,
   options: ImageToPatternOptions,
-): ThreadGroup[] {
+): ThreadGroup<Ring[]>[] {
   const regions = traced.regions.filter(
-    (r) =>
-      !(options.removeBackground && r.colorIndex === traced.backgroundIndex),
+    (r) => r.colorIndex !== traced.backgroundIndex,
   );
   if (regions.length === 0) return [];
 
@@ -157,84 +211,86 @@ function groupByThread(
     y: (p.y - cy) * scale,
   });
 
-  const groups = new Map<string, ThreadGroup>();
+  const groups = new Map<string, ThreadGroup<Ring[]>>();
   for (const region of regions) {
     const rings = region.rings.map((ring) => ring.map(toPattern));
     const area = regionArea(rings);
     if (area < MIN_REGION_AREA) continue;
-
     const { r, g, b } = traced.palette[region.colorIndex];
-    const color = nearestBrotherColor(r, g, b);
-    const group = groups.get(color.ColorCode) ?? {
-      color,
-      regions: [],
-      area: 0,
-    };
-    group.regions.push(rings);
-    group.area += area;
-    groups.set(color.ColorCode, group);
+    addToGroup(groups, nearestBrotherColor(r, g, b), rings, area);
   }
-
-  // Merge the smallest group into the one with the closest color while there
-  // are more threads than asked for, or a thread would only sew tiny bits
-  // (e.g. anti-aliased edges)
-  const list = [...groups.values()];
-  const total = list.reduce((sum, g) => sum + g.area, 0);
-  const smallestArea = () => Math.min(...list.map((g) => g.area));
-  while (
-    list.length > 1 &&
-    (list.length > options.colors || smallestArea() < total * MIN_THREAD_SHARE)
-  ) {
-    list.sort((a, b) => b.area - a.area);
-    const smallest = list.pop()!;
-    const target = list.reduce((best, g) =>
-      colorDistance(g.color, smallest.color) <
-      colorDistance(best.color, smallest.color)
-        ? g
-        : best,
-    );
-    target.regions.push(...smallest.regions);
-    target.area += smallest.area;
-  }
-
-  // Large areas first, details on top
-  return list.sort((a, b) => b.area - a.area);
+  return mergeGroups([...groups.values()], options.colors);
 }
 
 /**
- * Stitches for all thread groups: per region underlay, tatami fill and an
- * outline running stitch. Stitch format [x, y, cmd, colorIndex].
+ * Group cross stitch cells by thread color (cells in 0.1 mm, centered on the
+ * origin)
  */
-function groupsToStitches(groups: ThreadGroup[], density: FillDensity) {
+function groupCellsByThread(
+  image: ImageData,
+  palette: RGBA[],
+  backgroundIndex: number | null,
+  options: ImageToPatternOptions,
+): ThreadGroup<CrossCell>[] {
+  const grid = crossStitchGrid(
+    image,
+    palette,
+    backgroundIndex,
+    options.widthMm * 10,
+    options.crossSizeMm * 10,
+  );
+  const groups = new Map<string, ThreadGroup<CrossCell>>();
+  const cellArea = (options.crossSizeMm * 10) ** 2;
+  for (const cell of grid) {
+    const { r, g, b } = palette[cell.colorIndex];
+    addToGroup(groups, nearestBrotherColor(r, g, b), cell, cellArea);
+  }
+  return mergeGroups([...groups.values()], options.colors);
+}
+
+/**
+ * Collects stitches [x, y, cmd, colorIndex]; `sew` appends a run of points
+ * and travels to its start first (a stitch for moves up to `maxTravel`, a
+ * jump otherwise)
+ */
+function createStitchWriter(maxTravel: number) {
   const stitches: number[][] = [];
   let position: Point | null = null;
+  let currentColor = -1;
 
-  groups.forEach((group, colorIndex) => {
-    let colorStarted = false;
-
-    // Append a run of points, travelling to its start first
-    const sew = (points: Point[]) => {
+  return {
+    stitches,
+    get position() {
+      return position;
+    },
+    sew(points: Point[], colorIndex: number) {
       if (points.length === 0) return;
       const [first, ...rest] = points;
-      if (
-        colorStarted &&
-        position &&
-        Math.hypot(first.x - position.x, first.y - position.y) >
-          MAX_TRAVEL_STITCH
-      ) {
-        stitches.push([first.x, first.y, MOVE, colorIndex]);
-      } else {
-        stitches.push([first.x, first.y, 0, colorIndex]);
-      }
-      colorStarted = true;
+      const jump =
+        colorIndex === currentColor &&
+        position !== null &&
+        Math.hypot(first.x - position.x, first.y - position.y) > maxTravel;
+      stitches.push([first.x, first.y, jump ? MOVE : 0, colorIndex]);
       for (const p of rest) stitches.push([p.x, p.y, 0, colorIndex]);
       position = points[points.length - 1];
-    };
+      currentColor = colorIndex;
+    },
+  };
+}
+
+/** Tatami stitches: per region underlay, fill and outline */
+function regionsToStitches(
+  groups: ThreadGroup<Ring[]>[],
+  options: ImageToPatternOptions,
+): number[][] {
+  const writer = createStitchWriter(MAX_TRAVEL_STITCH);
+  groups.forEach((group, colorIndex) => {
+    const sew = (points: Point[]) => writer.sew(points, colorIndex);
 
     // Next region: the one whose outline starts closest to the needle
-    const remaining = [...group.regions];
+    const remaining = [...group.items];
     while (remaining.length > 0) {
-      const here = position;
+      const here = writer.position;
       let index = 0;
       if (here) {
         let best = Infinity;
@@ -255,17 +311,46 @@ function groupsToStitches(groups: ThreadGroup[], density: FillDensity) {
       }
       tatamiFill(rings, {
         angle: FILL_ANGLE,
-        spacing: ROW_SPACING[density],
+        spacing: ROW_SPACING[options.density],
         stitchLength: FILL_STITCH_LENGTH,
       }).forEach(sew);
       for (const ring of rings) {
-        sew(runAroundRing(ring, OUTLINE_STITCH_LENGTH, position ?? undefined));
+        const outline = runAroundRing(
+          ring,
+          OUTLINE_STITCH_LENGTH,
+          writer.position ?? undefined,
+        );
+        sew(repeatClosedRun(outline, options.outlineRepeats));
       }
     }
   });
+  return writer.stitches;
+}
 
-  // PEN coordinates are whole 0.1 mm units; rounding can create stitches of
-  // length zero, which are dropped
+/** Cross stitches, row by row per thread color */
+function cellsToStitches(
+  groups: ThreadGroup<CrossCell>[],
+  options: ImageToPatternOptions,
+): number[][] {
+  // Between runs always jump: unlike tatami, no fill covers a travel stitch
+  const writer = createStitchWriter(0);
+  groups.forEach((group, colorIndex) => {
+    for (const run of crossStitchRuns(
+      group.items,
+      options.crossSizeMm * 10,
+      options.crossRepeats,
+    )) {
+      writer.sew(run, colorIndex);
+    }
+  });
+  return writer.stitches;
+}
+
+/**
+ * PEN coordinates are whole 0.1 mm units; rounding can create stitches of
+ * length zero, which are dropped
+ */
+function roundStitches(stitches: number[][]): number[][] {
   const result: number[][] = [];
   for (const [x, y, cmd, color] of stitches) {
     const stitch = [Math.round(x), Math.round(y), cmd, color];
@@ -302,13 +387,27 @@ export function imageToPattern(
   const background = options.removeBackground
     ? findBackground(image, palette)
     : null;
-  const traced = traceImage(
-    image,
-    toThreadPalette(palette, background),
-    background === null ? null : 0,
-  );
-  const groups = groupByThread(traced, options);
-  const stitches = groupsToStitches(groups, options.density);
+  const threadPalette = toThreadPalette(palette, background);
+  const backgroundIndex = background === null ? null : 0;
+
+  let groups: ThreadGroup<unknown>[];
+  let stitches: number[][];
+  if (options.fill === "cross") {
+    const cellGroups = groupCellsByThread(
+      image,
+      threadPalette,
+      backgroundIndex,
+      options,
+    );
+    groups = cellGroups;
+    stitches = cellsToStitches(cellGroups, options);
+  } else {
+    const traced = traceImage(image, threadPalette, backgroundIndex);
+    const regionGroups = groupRegionsByThread(traced, options);
+    groups = regionGroups;
+    stitches = regionsToStitches(regionGroups, options);
+  }
+  stitches = roundStitches(stitches);
   if (stitches.length < 2) return null;
 
   const penData = new Uint8Array(encodeStitchesToPen(stitches).penBytes);
