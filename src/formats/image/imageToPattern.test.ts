@@ -274,6 +274,23 @@ describe("cross stitch", () => {
     expect(crossStitchRuns([cell(0, 0)], 25, 3)[0].length).toBe(single + 4);
   });
 
+  it("jumps between runs instead of sewing across empty cells", () => {
+    // Two diagonal cells at 2 mm: the move between them (2.8 mm) would be
+    // a stray diagonal stitch through the empty cell
+    const image = makeImage(20, 20, (x, y) =>
+      x < 10 === y < 10 ? RED : [0, 0, 0, 0],
+    );
+    const pattern = imageToPattern(image, {
+      ...TATAMI,
+      fill: "cross",
+      colors: 1,
+      widthMm: 4,
+      removeBackground: false,
+      crossSizeMm: 2,
+    });
+    expect(pattern!.stitches.filter((s) => s[2] & MOVE)).toHaveLength(1);
+  });
+
   it("turns the logo into crosses of the chosen size", () => {
     const pattern = imageToPattern(logo, {
       ...TATAMI,

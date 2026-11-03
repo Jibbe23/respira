@@ -250,9 +250,10 @@ function groupCellsByThread(
 
 /**
  * Collects stitches [x, y, cmd, colorIndex]; `sew` appends a run of points
- * and travels to its start first (a stitch for short moves, a jump otherwise)
+ * and travels to its start first (a stitch for moves up to `maxTravel`, a
+ * jump otherwise)
  */
-function createStitchWriter() {
+function createStitchWriter(maxTravel: number) {
   const stitches: number[][] = [];
   let position: Point | null = null;
   let currentColor = -1;
@@ -268,8 +269,7 @@ function createStitchWriter() {
       const jump =
         colorIndex === currentColor &&
         position !== null &&
-        Math.hypot(first.x - position.x, first.y - position.y) >
-          MAX_TRAVEL_STITCH;
+        Math.hypot(first.x - position.x, first.y - position.y) > maxTravel;
       stitches.push([first.x, first.y, jump ? MOVE : 0, colorIndex]);
       for (const p of rest) stitches.push([p.x, p.y, 0, colorIndex]);
       position = points[points.length - 1];
@@ -283,7 +283,7 @@ function regionsToStitches(
   groups: ThreadGroup<Ring[]>[],
   options: ImageToPatternOptions,
 ): number[][] {
-  const writer = createStitchWriter();
+  const writer = createStitchWriter(MAX_TRAVEL_STITCH);
   groups.forEach((group, colorIndex) => {
     const sew = (points: Point[]) => writer.sew(points, colorIndex);
 
@@ -332,7 +332,8 @@ function cellsToStitches(
   groups: ThreadGroup<CrossCell>[],
   options: ImageToPatternOptions,
 ): number[][] {
-  const writer = createStitchWriter();
+  // Between runs always jump: unlike tatami, no fill covers a travel stitch
+  const writer = createStitchWriter(0);
   groups.forEach((group, colorIndex) => {
     for (const run of crossStitchRuns(
       group.items,

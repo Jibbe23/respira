@@ -5,7 +5,7 @@
  */
 
 import type { Point } from "./fillStitches";
-import type { RGBA } from "./traceImage";
+import { nearestPaletteIndex, type RGBA } from "./traceImage";
 
 export interface CrossCell {
   col: number;
@@ -25,20 +25,12 @@ function mapPixels(image: ImageData, palette: RGBA[]): Int16Array {
       indices[p] = -1;
       continue;
     }
-    let best = -1;
-    let bestDistance = Infinity;
-    palette.forEach((c, k) => {
-      if (c.a < 128) return;
-      const d =
-        (c.r - data[i]) ** 2 +
-        (c.g - data[i + 1]) ** 2 +
-        (c.b - data[i + 2]) ** 2;
-      if (d < bestDistance) {
-        bestDistance = d;
-        best = k;
-      }
-    });
-    indices[p] = best;
+    indices[p] = nearestPaletteIndex(
+      palette,
+      data[i],
+      data[i + 1],
+      data[i + 2],
+    );
   }
   return indices;
 }

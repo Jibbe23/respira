@@ -155,7 +155,12 @@ function pathToRing(path: TracePath): Ring {
   return ring;
 }
 
-function nearestPaletteIndex(palette: RGBA[], r: number, g: number, b: number) {
+export function nearestPaletteIndex(
+  palette: RGBA[],
+  r: number,
+  g: number,
+  b: number,
+) {
   let best = 0;
   let bestDistance = Infinity;
   palette.forEach((c, i) => {
