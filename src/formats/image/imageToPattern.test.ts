@@ -7,6 +7,7 @@ import {
   regionArea,
   repeatClosedRun,
 } from "./fillStitches";
+import { createTravelGraph, connectBlocks } from "./travel";
 import { MOVE } from "../import/constants";
 
 type Pixel = [number, number, number, number];
@@ -134,6 +135,76 @@ describe("fillStitches", () => {
   });
 });
 
+describe("travel inside a region", () => {
+  // U shape: the fill rows are split by the gap between the arms
+  const u = [
+    { x: 0, y: 0 },
+    { x: 60, y: 0 },
+    { x: 60, y: 200 },
+    { x: 140, y: 200 },
+    { x: 140, y: 0 },
+    { x: 200, y: 0 },
+    { x: 200, y: 260 },
+    { x: 0, y: 260 },
+  ];
+  const insideU = (p: { x: number; y: number }) =>
+    p.x >= -1 &&
+    p.x <= 201 &&
+    p.y >= -1 &&
+    p.y <= 261 &&
+    !(p.x > 61 && p.x < 139 && p.y < 199);
+
+  it("sews a split fill as one thread that stays inside the shape", () => {
+    const blocks = tatamiFill([u], { angle: 45, spacing: 5, stitchLength: 40 });
+    expect(blocks.length).toBeGreaterThan(1);
+    const graph = createTravelGraph([u], 45, 15);
+    const runs = connectBlocks(blocks, graph, null, { travelStitch: 25 });
+    expect(runs).toHaveLength(1);
+    const run = runs[0];
+    for (let i = 0; i < run.length; i++) {
+      expect(insideU(run[i])).toBe(true);
+      if (i === 0) continue;
+      // No stitch crosses the gap between the arms
+      const mid = {
+        x: (run[i].x + run[i - 1].x) / 2,
+        y: (run[i].y + run[i - 1].y) / 2,
+      };
+      expect(insideU(mid)).toBe(true);
+    }
+  });
+
+  it("never stitches across a narrow slit", () => {
+    // Square with a 0.6 mm slit from the right edge to the middle
+    const slit = [
+      { x: 0, y: 0 },
+      { x: 200, y: 0 },
+      { x: 200, y: 97 },
+      { x: 100, y: 97 },
+      { x: 100, y: 103 },
+      { x: 200, y: 103 },
+      { x: 200, y: 200 },
+      { x: 0, y: 200 },
+    ];
+    // Underlay rows end inside the shape: their hop onto the travel graph
+    // must not cross the slit
+    const blocks = tatamiFill([slit], {
+      angle: 135,
+      spacing: 25,
+      stitchLength: 30,
+      inset: 5,
+    });
+    const graph = createTravelGraph([slit], 45, 15);
+    const [run] = connectBlocks(blocks, graph, null, { travelStitch: 25 });
+    for (let i = 1; i < run.length; i++) {
+      for (let k = 1; k < 10; k++) {
+        const x = run[i - 1].x + ((run[i].x - run[i - 1].x) * k) / 10;
+        const y = run[i - 1].y + ((run[i].y - run[i - 1].y) * k) / 10;
+        expect(x > 101 && y > 97.5 && y < 102.5).toBe(false);
+      }
+    }
+  });
+});
+
 describe("imageToPattern", () => {
   it("turns a two-color logo into two threads without the background", () => {
     const pattern = imageToPattern(logo, {
@@ -153,8 +224,8 @@ describe("imageToPattern", () => {
     // Width as requested (lock stitches add a few tenths of a millimetre)
     expect(Math.abs(bounds.maxX - bounds.minX - 600)).toBeLessThanOrEqual(10);
 
-    // Fill and outline of one color are connected by jumps
-    expect(stitches.some((s) => s[2] & MOVE)).toBe(true);
+    // Each shape is one area: underlay, fill and outline without a jump
+    expect(stitches.some((s) => s[2] & MOVE)).toBe(false);
     expect(new Set(stitches.map((s) => s[3]))).toEqual(new Set([0, 1]));
   });
 
@@ -274,21 +345,38 @@ describe("cross stitch", () => {
     expect(crossStitchRuns([cell(0, 0)], 25, 3)[0].length).toBe(single + 4);
   });
 
-  it("jumps between runs instead of sewing across empty cells", () => {
-    // Two diagonal cells at 2 mm: the move between them (2.8 mm) would be
-    // a stray diagonal stitch through the empty cell
-    const image = makeImage(20, 20, (x, y) =>
-      x < 10 === y < 10 ? RED : [0, 0, 0, 0],
-    );
-    const pattern = imageToPattern(image, {
+  const crossPattern = (image: ImageData, widthMm: number) =>
+    imageToPattern(image, {
       ...TATAMI,
       fill: "cross",
       colors: 1,
-      widthMm: 4,
+      widthMm,
       removeBackground: false,
       crossSizeMm: 2,
-    });
-    expect(pattern!.stitches.filter((s) => s[2] & MOVE)).toHaveLength(1);
+    })!;
+
+  it("travels over sewn lines instead of across empty cells", () => {
+    // Two diagonal cells at 2 mm: a direct move between the run starts
+    // (2.8 mm) would be a stray diagonal through an empty cell
+    const image = makeImage(20, 20, (x, y) =>
+      x < 10 === y < 10 ? RED : [0, 0, 0, 0],
+    );
+    const { stitches } = crossPattern(image, 4);
+    expect(stitches.some((s) => s[2] & MOVE)).toBe(false);
+    // Cells span x, y in [-20, 0] and [0, 20]; nothing in the empty quarters
+    for (let i = 1; i < stitches.length; i++) {
+      const x = (stitches[i][0] + stitches[i - 1][0]) / 2;
+      const y = (stitches[i][1] + stitches[i - 1][1]) / 2;
+      expect((x > 1 && y < -1) || (x < -1 && y > 1)).toBe(false);
+    }
+  });
+
+  it("jumps between cells that do not touch", () => {
+    const image = makeImage(30, 10, (x) =>
+      x < 10 || x >= 20 ? RED : [0, 0, 0, 0],
+    );
+    const { stitches } = crossPattern(image, 6);
+    expect(stitches.filter((s) => s[2] & MOVE)).toHaveLength(1);
   });
 
   it("turns the logo into crosses of the chosen size", () => {

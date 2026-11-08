@@ -17,6 +17,7 @@ import {
 import {
   crossStitchGrid,
   crossStitchRuns,
+  createCrossTravelGraph,
   type CrossCell,
 } from "./crossStitch";
 import {
@@ -35,6 +36,7 @@ import {
   type RGBA,
   type TracedImage,
 } from "./traceImage";
+import { createTravelGraph, connectBlocks } from "./travel";
 
 export type FillDensity = "normal" | "dense";
 export type FillType = "tatami" | "cross";
@@ -66,6 +68,10 @@ const MIN_UNDERLAY_AREA = 1000;
 const MIN_THREAD_SHARE = 0.02;
 /** Longer moves inside one color become jumps instead of stitches */
 const MAX_TRAVEL_STITCH = 30;
+/** Running stitches when travelling inside a region */
+const TRAVEL_STITCH_LENGTH = 25;
+/** Row spacing of the travel graph (coarser than the fill, enough to route) */
+const TRAVEL_GRAPH_SPACING = 15;
 
 const brotherColors = getAllBrotherColors();
 
@@ -306,21 +312,31 @@ function regionsToStitches(
       }
       const [rings] = remaining.splice(index, 1);
 
+      // Underlay, fill and outline as one thread: travel inside the region
+      // instead of jumping (and trimming) between blocks
+      const graph = createTravelGraph(rings, FILL_ANGLE, TRAVEL_GRAPH_SPACING);
+      const sewBlocks = (blocks: Point[][]) =>
+        connectBlocks(blocks, graph, writer.position, {
+          travelStitch: TRAVEL_STITCH_LENGTH,
+        }).forEach(sew);
+
       if (regionArea(rings) >= MIN_UNDERLAY_AREA) {
-        tatamiFill(rings, { angle: FILL_ANGLE + 90, ...UNDERLAY }).forEach(sew);
+        sewBlocks(tatamiFill(rings, { angle: FILL_ANGLE + 90, ...UNDERLAY }));
       }
-      tatamiFill(rings, {
-        angle: FILL_ANGLE,
-        spacing: ROW_SPACING[options.density],
-        stitchLength: FILL_STITCH_LENGTH,
-      }).forEach(sew);
+      sewBlocks(
+        tatamiFill(rings, {
+          angle: FILL_ANGLE,
+          spacing: ROW_SPACING[options.density],
+          stitchLength: FILL_STITCH_LENGTH,
+        }),
+      );
       for (const ring of rings) {
         const outline = runAroundRing(
           ring,
           OUTLINE_STITCH_LENGTH,
           writer.position ?? undefined,
         );
-        sew(repeatClosedRun(outline, options.outlineRepeats));
+        sewBlocks([repeatClosedRun(outline, options.outlineRepeats)]);
       }
     }
   });
@@ -332,15 +348,17 @@ function cellsToStitches(
   groups: ThreadGroup<CrossCell>[],
   options: ImageToPatternOptions,
 ): number[][] {
-  // Between runs always jump: unlike tatami, no fill covers a travel stitch
+  // Runs of one color are connected along lines the crosses sew anyway;
+  // between unconnected pieces always jump (a travel stitch would show)
   const writer = createStitchWriter(0);
   groups.forEach((group, colorIndex) => {
-    for (const run of crossStitchRuns(
-      group.items,
-      options.crossSizeMm * 10,
-      options.crossRepeats,
-    )) {
-      writer.sew(run, colorIndex);
+    const cellSize = options.crossSizeMm * 10;
+    const runs = crossStitchRuns(group.items, cellSize, options.crossRepeats);
+    const graph = createCrossTravelGraph(group.items, cellSize);
+    for (const piece of connectBlocks(runs, graph, writer.position, {
+      allowReverse: false,
+    })) {
+      writer.sew(piece, colorIndex);
     }
   });
   return writer.stitches;
