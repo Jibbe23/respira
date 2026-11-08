@@ -18,6 +18,10 @@ import {
 
 /** Travel along a fill row shows more than along the outline (sewn over) */
 const ROW_TRAVEL_COST = 2;
+/** Farther from the graph than this, a point is reached by a jump */
+const MAX_HOP = 30;
+/** Candidates checked when looking for a node reachable in a straight line */
+const HOP_CANDIDATES = 8;
 
 export interface TravelEdge {
   to: number;
@@ -28,89 +32,103 @@ export interface TravelEdge {
 export interface TravelGraph {
   nodes: Point[];
   edges: TravelEdge[][];
+  // Straight hops onto the graph must not cross these (none: no check)
+  rings?: Ring[];
 }
 
 const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 
-function pathLength(start: Point, path: Point[]): number {
-  let length = 0;
-  let prev = start;
-  for (const p of path) {
-    length += distance(prev, p);
-    prev = p;
-  }
-  return length;
+/** Does segment ab cross segment cd (touching at an end does not count)? */
+function crosses(a: Point, b: Point, c: Point, d: Point): boolean {
+  // Points on a ring are computed with rounding errors: treat almost
+  // collinear as touching
+  const side = (p: Point, q: Point, r: Point) => {
+    const cross = (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+    return Math.abs(cross) < 1e-6 ? 0 : Math.sign(cross);
+  };
+  return side(a, b, c) * side(a, b, d) < 0 && side(c, d, a) * side(c, d, b) < 0;
 }
 
 /**
- * Graph of the points where fill rows meet the outline: neighbouring points
- * on a ring are connected along the ring, the two ends of a row by the row
+ * Graph along the outline (every ring vertex and every point where a fill
+ * row meets the ring, connected in ring order) plus the fill rows between
+ * their two ends
  */
 export function createTravelGraph(
   rings: Ring[],
   angle: number,
   spacing: number,
 ): TravelGraph {
-  const nodes: Point[] = [];
-  const edges: TravelEdge[][] = [];
-  const perRing = rings.map(() => [] as { node: number; at: RingPosition }[]);
+  const graph: TravelGraph = { nodes: [], edges: [], rings };
+  const addNode = (p: Point) => {
+    graph.nodes.push(p);
+    graph.edges.push([]);
+    return graph.nodes.length - 1;
+  };
+  const link = (a: number, b: number, factor = 1) => {
+    const cost = distance(graph.nodes[a], graph.nodes[b]) * factor;
+    graph.edges[a].push({ to: b, cost, path: [graph.nodes[b]] });
+    graph.edges[b].push({ to: a, cost, path: [graph.nodes[a]] });
+  };
 
-  const addNode = (at: RingPosition) => {
+  // Per ring: nodes sorted by their position along the ring
+  const onRing = rings.map((ring) =>
+    ring.map((p, i) => ({ at: i, node: addNode(p) })),
+  );
+  const nodeAt = (at: RingPosition) => {
     const ring = rings[at.ring];
+    if (at.t === 0) return onRing[at.ring][at.edge].node;
     const a = ring[at.edge];
     const b = ring[(at.edge + 1) % ring.length];
-    nodes.push({ x: a.x + (b.x - a.x) * at.t, y: a.y + (b.y - a.y) * at.t });
-    edges.push([]);
-    perRing[at.ring].push({ node: nodes.length - 1, at });
-    return nodes.length - 1;
-  };
-  const connect = (from: number, to: number, path: Point[]) => {
-    edges[from].push({ to, cost: pathLength(nodes[from], path), path });
-  };
-
-  for (const [start, end] of fillRowCrossings(rings, angle, spacing)) {
-    const a = addNode(start);
-    const b = addNode(end);
-    const cost = distance(nodes[a], nodes[b]) * ROW_TRAVEL_COST;
-    edges[a].push({ to: b, cost, path: [nodes[b]] });
-    edges[b].push({ to: a, cost, path: [nodes[a]] });
-  }
-
-  // Along each ring: from every crossing to the next one in ring order
-  perRing.forEach((list, r) => {
-    if (list.length < 2) return;
-    const ring = rings[r];
-    list.sort((p, q) => p.at.edge + p.at.t - (q.at.edge + q.at.t));
-    list.forEach((from, i) => {
-      const to = list[(i + 1) % list.length];
-      let count = (to.at.edge - from.at.edge + ring.length) % ring.length;
-      if (count === 0 && to.at.t < from.at.t) count = ring.length;
-      const vertices: Point[] = [];
-      for (let k = 1; k <= count; k++) {
-        vertices.push(ring[(from.at.edge + k) % ring.length]);
-      }
-      connect(from.node, to.node, [...vertices, nodes[to.node]]);
-      connect(to.node, from.node, [...vertices.reverse(), nodes[from.node]]);
+    const node = addNode({
+      x: a.x + (b.x - a.x) * at.t,
+      y: a.y + (b.y - a.y) * at.t,
     });
-  });
-  return { nodes, edges };
+    onRing[at.ring].push({ at: at.edge + at.t, node });
+    return node;
+  };
+  for (const [start, end] of fillRowCrossings(rings, angle, spacing)) {
+    link(nodeAt(start), nodeAt(end), ROW_TRAVEL_COST);
+  }
+  for (const list of onRing) {
+    list.sort((p, q) => p.at - q.at);
+    list.forEach((item, i) => {
+      if (list.length > 1) link(item.node, list[(i + 1) % list.length].node);
+    });
+  }
+  return graph;
 }
 
-function nearestNode(graph: TravelGraph, p: Point): number {
-  let best = -1;
-  let bestDistance = Infinity;
-  graph.nodes.forEach((node, i) => {
-    const d = distance(node, p);
-    if (d < bestDistance) {
-      bestDistance = d;
-      best = i;
-    }
-  });
-  return best;
+/**
+ * Nearest node that can be reached from `p` in a straight line without
+ * leaving the region; -1 if there is none close enough
+ */
+function hopNode(graph: TravelGraph, p: Point): number {
+  const order = graph.nodes
+    .map((node, i) => ({ i, d: distance(node, p) }))
+    .filter((c) => c.d <= MAX_HOP)
+    .sort((a, b) => a.d - b.d)
+    .slice(0, HOP_CANDIDATES);
+  const rings = graph.rings;
+  for (const { i } of order) {
+    const node = graph.nodes[i];
+    const blocked = rings?.some((ring) =>
+      ring.some((a, k) => crosses(p, node, a, ring[(k + 1) % ring.length])),
+    );
+    if (!blocked) return i;
+  }
+  return -1;
 }
 
-/** Cheapest travel from `source` to every node (Dijkstra, binary heap) */
-function shortestPaths(graph: TravelGraph, source: number) {
+/**
+ * Cheapest travel from `source` (Dijkstra, binary heap), stopping at the
+ * first node in `targets`; null if none can be reached
+ */
+function travelToNearest(
+  graph: TravelGraph,
+  source: number,
+  targets: Set<number>,
+): { node: number; path: Point[] } | null {
   const n = graph.nodes.length;
   const dist = new Float64Array(n).fill(Infinity);
   const via: (TravelEdge | null)[] = new Array(n).fill(null);
@@ -150,6 +168,14 @@ function shortestPaths(graph: TravelGraph, source: number) {
   while (heap.length > 0) {
     const [d, u] = pop();
     if (d > dist[u]) continue;
+    if (targets.has(u)) {
+      const parts: Point[][] = [];
+      for (let v = u; v !== source; v = prev[v]) parts.push(via[v]!.path);
+      return {
+        node: u,
+        path: [graph.nodes[source], ...parts.reverse().flat()],
+      };
+    }
     for (const edge of graph.edges[u]) {
       const next = d + edge.cost;
       if (next < dist[edge.to]) {
@@ -160,37 +186,44 @@ function shortestPaths(graph: TravelGraph, source: number) {
       }
     }
   }
+  return null;
+}
 
-  return {
-    dist,
-    /** Points after the source node up to node `to` */
-    pathTo(to: number): Point[] {
-      const parts: Point[][] = [];
-      for (let v = to; v !== source; v = prev[v]) parts.push(via[v]!.path);
-      return parts.reverse().flat();
-    },
-  };
+export interface ConnectOptions {
+  // Resample travel paths to this stitch length (sewn as they are without)
+  travelStitch?: number;
+  // Blocks may be sewn backwards (not for cross stitch: the top diagonal
+  // would change direction)
+  allowReverse?: boolean;
 }
 
 /**
- * Sew `blocks` (point lists) one after another, picking the next block, in
- * either direction, that is cheapest to reach and travelling to it inside
- * the region. Travel paths are resampled to `travelStitch`, or sewn as they
- * are without it. Returns one run per piece that could be connected; blocks
- * that cannot be reached start a new run (the caller jumps there).
+ * Sew `blocks` (point lists) one after another: next is the block that is
+ * cheapest to reach by travelling inside the region. Returns one run per
+ * piece that could be connected; a block that cannot be reached starts a
+ * new run (the caller jumps there), the nearest one first.
  */
 export function connectBlocks(
   blocks: Point[][],
   graph: TravelGraph,
   start: Point | null,
-  travelStitch?: number,
+  { travelStitch, allowReverse = true }: ConnectOptions = {},
 ): Point[][] {
   const remaining = blocks
     .filter((b) => b.length > 0)
     .map((points) => ({
       points,
-      first: nearestNode(graph, points[0]),
-      last: nearestNode(graph, points[points.length - 1]),
+      ends: [
+        { node: hopNode(graph, points[0]), reversed: false },
+        ...(allowReverse
+          ? [
+              {
+                node: hopNode(graph, points[points.length - 1]),
+                reversed: true,
+              },
+            ]
+          : []),
+      ],
     }));
   const runs: Point[][] = [];
   let position = start;
@@ -199,32 +232,44 @@ export function connectBlocks(
   while (remaining.length > 0) {
     let index = 0;
     let reversed = false;
-    let cost = Infinity;
-    let travel: Point[] = [];
-    const source = position ? nearestNode(graph, position) : -1;
-    if (position && source >= 0) {
-      const paths = shortestPaths(graph, source);
-      const costTo = (node: number, p: Point) =>
-        node < 0 ? Infinity : paths.dist[node] + distance(graph.nodes[node], p);
-      remaining.forEach((block, i) => {
-        const forward = costTo(block.first, block.points[0]);
-        const end = block.points[block.points.length - 1];
-        const backward = costTo(block.last, end);
-        if (forward < cost) [cost, index, reversed] = [forward, i, false];
-        if (backward < cost) [cost, index, reversed] = [backward, i, true];
-      });
-      if (cost < Infinity) {
-        const block = remaining[index];
-        const target = reversed ? block.last : block.first;
-        travel = [graph.nodes[source], ...paths.pathTo(target)];
+    let travel: Point[] | null = null;
+
+    const source = position ? hopNode(graph, position) : -1;
+    if (source >= 0) {
+      const targets = new Set<number>();
+      for (const block of remaining) {
+        for (const end of block.ends) if (end.node >= 0) targets.add(end.node);
+      }
+      const found = travelToNearest(graph, source, targets);
+      if (found) {
+        index = remaining.findIndex((b) =>
+          b.ends.some((e) => e.node === found.node),
+        );
+        reversed = remaining[index].ends.find(
+          (e) => e.node === found.node,
+        )!.reversed;
+        travel = found.path;
       }
     }
+    if (!travel && position) {
+      // Nothing reachable: jump to the nearest block end
+      let best = Infinity;
+      remaining.forEach((block, i) => {
+        for (const end of block.ends) {
+          const p = end.reversed
+            ? block.points[block.points.length - 1]
+            : block.points[0];
+          const d = distance(p, position!);
+          if (d < best) [best, index, reversed] = [d, i, end.reversed];
+        }
+      });
+    }
+
     const [block] = remaining.splice(index, 1);
     const points = reversed ? [...block.points].reverse() : block.points;
-
-    if (cost < Infinity) {
+    if (travel) {
       const path = [...travel, points[0]];
-      run.push(...(travelStitch ? runAlongPath(path, travelStitch) : path));
+      run.push(...(travelStitch ? runAlongPath(path, travelStitch, 0) : path));
     } else if (run.length > 0) {
       runs.push(run);
       run = [];

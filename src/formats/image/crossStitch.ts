@@ -187,12 +187,15 @@ export function createCrossTravelGraph(
     }
     return id;
   };
+  const linked = new Set<string>();
   const link = (a: number, b: number) => {
+    const key = a < b ? `${a},${b}` : `${b},${a}`;
+    if (linked.has(key)) return;
+    linked.add(key);
     const cost = Math.hypot(
       graph.nodes[a].x - graph.nodes[b].x,
       graph.nodes[a].y - graph.nodes[b].y,
     );
-    // Shared cell edges are added twice; the duplicate does no harm
     graph.edges[a].push({ to: b, cost, path: [graph.nodes[b]] });
     graph.edges[b].push({ to: a, cost, path: [graph.nodes[a]] });
   };

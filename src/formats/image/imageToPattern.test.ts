@@ -158,7 +158,7 @@ describe("travel inside a region", () => {
     const blocks = tatamiFill([u], { angle: 45, spacing: 5, stitchLength: 40 });
     expect(blocks.length).toBeGreaterThan(1);
     const graph = createTravelGraph([u], 45, 15);
-    const runs = connectBlocks(blocks, graph, null, 25);
+    const runs = connectBlocks(blocks, graph, null, { travelStitch: 25 });
     expect(runs).toHaveLength(1);
     const run = runs[0];
     for (let i = 0; i < run.length; i++) {
@@ -170,6 +170,37 @@ describe("travel inside a region", () => {
         y: (run[i].y + run[i - 1].y) / 2,
       };
       expect(insideU(mid)).toBe(true);
+    }
+  });
+
+  it("never stitches across a narrow slit", () => {
+    // Square with a 0.6 mm slit from the right edge to the middle
+    const slit = [
+      { x: 0, y: 0 },
+      { x: 200, y: 0 },
+      { x: 200, y: 97 },
+      { x: 100, y: 97 },
+      { x: 100, y: 103 },
+      { x: 200, y: 103 },
+      { x: 200, y: 200 },
+      { x: 0, y: 200 },
+    ];
+    // Underlay rows end inside the shape: their hop onto the travel graph
+    // must not cross the slit
+    const blocks = tatamiFill([slit], {
+      angle: 135,
+      spacing: 25,
+      stitchLength: 30,
+      inset: 5,
+    });
+    const graph = createTravelGraph([slit], 45, 15);
+    const [run] = connectBlocks(blocks, graph, null, { travelStitch: 25 });
+    for (let i = 1; i < run.length; i++) {
+      for (let k = 1; k < 10; k++) {
+        const x = run[i - 1].x + ((run[i].x - run[i - 1].x) * k) / 10;
+        const y = run[i - 1].y + ((run[i].y - run[i - 1].y) * k) / 10;
+        expect(x > 101 && y > 97.5 && y < 102.5).toBe(false);
+      }
     }
   });
 });

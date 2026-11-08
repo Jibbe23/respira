@@ -316,12 +316,9 @@ function regionsToStitches(
       // instead of jumping (and trimming) between blocks
       const graph = createTravelGraph(rings, FILL_ANGLE, TRAVEL_GRAPH_SPACING);
       const sewBlocks = (blocks: Point[][]) =>
-        connectBlocks(
-          blocks,
-          graph,
-          writer.position,
-          TRAVEL_STITCH_LENGTH,
-        ).forEach(sew);
+        connectBlocks(blocks, graph, writer.position, {
+          travelStitch: TRAVEL_STITCH_LENGTH,
+        }).forEach(sew);
 
       if (regionArea(rings) >= MIN_UNDERLAY_AREA) {
         sewBlocks(tatamiFill(rings, { angle: FILL_ANGLE + 90, ...UNDERLAY }));
@@ -358,7 +355,9 @@ function cellsToStitches(
     const cellSize = options.crossSizeMm * 10;
     const runs = crossStitchRuns(group.items, cellSize, options.crossRepeats);
     const graph = createCrossTravelGraph(group.items, cellSize);
-    for (const piece of connectBlocks(runs, graph, writer.position)) {
+    for (const piece of connectBlocks(runs, graph, writer.position, {
+      allowReverse: false,
+    })) {
       writer.sew(piece, colorIndex);
     }
   });

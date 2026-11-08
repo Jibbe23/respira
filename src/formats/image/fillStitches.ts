@@ -267,9 +267,15 @@ export function fillRowCrossings(
 
 /**
  * Running stitch along an open path: needle points every `stitchLength`,
- * sharp corners kept so lines stay crisp, ends at the last point
+ * sharp corners kept so lines stay crisp, ends at the last point. A corner
+ * closer than `minCorner` to the previous needle point is cut short, unless
+ * `minCorner` is 0 (travel must not cut across a narrow gap).
  */
-export function runAlongPath(path: Point[], stitchLength: number): Point[] {
+export function runAlongPath(
+  path: Point[],
+  stitchLength: number,
+  minCorner = stitchLength / 4,
+): Point[] {
   if (path.length === 0) return [];
   const points: Point[] = [path[0]];
   let carried = 0; // distance travelled since the last needle point
@@ -294,7 +300,7 @@ export function runAlongPath(path: Point[], stitchLength: number): Point[] {
           (b.x - a.x) * (c.x - b.x) + (b.y - a.y) * (c.y - b.y),
         ),
       );
-      sharpCorner = turn > Math.PI / 6 && carried > stitchLength / 4;
+      sharpCorner = turn > Math.PI / 6 && carried > minCorner;
     }
     if (sharpCorner || last) {
       points.push(b);
