@@ -21,12 +21,22 @@ export interface FillOptions {
   inset?: number;
 }
 
+/** Point on ring `ring`, on the edge from vertex `edge` to the next, at fraction `t` */
+export interface RingPosition {
+  ring: number;
+  edge: number;
+  t: number;
+}
+
 /** Row segment on scanline `row`, x range in rotated coordinates */
 interface Segment {
   row: number;
   y: number;
   x0: number;
   x1: number;
+  // Where the row crosses the rings (before the inset)
+  start: RingPosition;
+  end: RingPosition;
 }
 
 const rotate = (p: Point, cos: number, sin: number): Point => ({
@@ -79,22 +89,35 @@ function scanlineSegments(
   const segments: Segment[] = [];
   let row = 0;
   for (let y = minY + spacing / 2; y < maxY; y += spacing, row++) {
-    const xs: number[] = [];
-    for (const ring of rotated) {
+    const xs: { x: number; position: RingPosition }[] = [];
+    rotated.forEach((ring, r) => {
       for (let i = 0; i < ring.length; i++) {
         const a = ring[i];
         const b = ring[(i + 1) % ring.length];
         // Half-open rule so a vertex on the scanline counts once
         if (a.y <= y !== b.y <= y) {
-          xs.push(a.x + ((y - a.y) / (b.y - a.y)) * (b.x - a.x));
+          const t = (y - a.y) / (b.y - a.y);
+          xs.push({
+            x: a.x + t * (b.x - a.x),
+            position: { ring: r, edge: i, t },
+          });
         }
       }
-    }
-    xs.sort((p, q) => p - q);
+    });
+    xs.sort((p, q) => p.x - q.x);
     for (let i = 0; i + 1 < xs.length; i += 2) {
-      const x0 = xs[i] + inset;
-      const x1 = xs[i + 1] - inset;
-      if (x1 - x0 >= 1) segments.push({ row, y, x0, x1 });
+      const x0 = xs[i].x + inset;
+      const x1 = xs[i + 1].x - inset;
+      if (x1 - x0 >= 1) {
+        segments.push({
+          row,
+          y,
+          x0,
+          x1,
+          start: xs[i].position,
+          end: xs[i + 1].position,
+        });
+      }
     }
   }
   return segments;
@@ -190,22 +213,95 @@ export function tatamiFill(rings: Ring[], options: FillOptions): Point[][] {
     options.inset ?? 0,
   );
 
+  const maxStitch = (options.stitchLength * 4) / 3;
   return groupIntoBlocks(segments, options.stitchLength).map((block) => {
     const points: Point[] = [];
+    let rowStart = 0;
     block.forEach((s, i) => {
       const leftToRight = i % 2 === 0;
-      points.push(
-        ...rowPoints(
-          s.y,
-          leftToRight ? s.x0 : s.x1,
-          leftToRight ? s.x1 : s.x0,
-          s.row,
-          options.stitchLength,
-        ),
+      const row = rowPoints(
+        s.y,
+        leftToRight ? s.x0 : s.x1,
+        leftToRight ? s.x1 : s.x0,
+        s.row,
+        options.stitchLength,
       );
+      // Skip the last stitch of the previous row: its end and the start of
+      // this row would be two needle holes right next to each other at the
+      // edge (short stitch that strains the thread)
+      const end = points.length - 1;
+      if (
+        end - rowStart >= 2 &&
+        Math.hypot(
+          points[end - 1].x - row[0].x,
+          points[end - 1].y - row[0].y,
+        ) <= maxStitch
+      ) {
+        points.pop();
+      }
+      rowStart = points.length;
+      points.push(...row);
     });
     return points.map((p) => rotate(p, Math.cos(rad), Math.sin(rad)));
   });
+}
+
+/**
+ * Where the fill rows along `angle` cross the rings: one pair of ring
+ * positions per row segment (used to travel inside a region)
+ */
+export function fillRowCrossings(
+  rings: Ring[],
+  angle: number,
+  spacing: number,
+): [RingPosition, RingPosition][] {
+  const rad = (angle * Math.PI) / 180;
+  return scanlineSegments(
+    rings,
+    Math.cos(-rad),
+    Math.sin(-rad),
+    spacing,
+    0,
+  ).map((s) => [s.start, s.end]);
+}
+
+/**
+ * Running stitch along an open path: needle points every `stitchLength`,
+ * sharp corners kept so lines stay crisp, ends at the last point
+ */
+export function runAlongPath(path: Point[], stitchLength: number): Point[] {
+  if (path.length === 0) return [];
+  const points: Point[] = [path[0]];
+  let carried = 0; // distance travelled since the last needle point
+  for (let n = 1; n < path.length; n++) {
+    const a = path[n - 1];
+    const b = path[n];
+    const length = Math.hypot(b.x - a.x, b.y - a.y);
+    let along = stitchLength - carried;
+    while (along < length) {
+      const t = along / length;
+      points.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+      along += stitchLength;
+    }
+    carried = length - (along - stitchLength);
+    const last = n === path.length - 1;
+    let sharpCorner = false;
+    if (!last) {
+      const c = path[n + 1];
+      const turn = Math.abs(
+        Math.atan2(
+          (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x),
+          (b.x - a.x) * (c.x - b.x) + (b.y - a.y) * (c.y - b.y),
+        ),
+      );
+      sharpCorner = turn > Math.PI / 6 && carried > stitchLength / 4;
+    }
+    if (sharpCorner || last) {
+      points.push(b);
+      carried = 0;
+    }
+  }
+  return points;
 }
 
 /**
@@ -229,35 +325,8 @@ export function runAroundRing(
       }
     });
   }
-
-  const points: Point[] = [ring[start]];
-  let carried = 0; // distance travelled since the last needle point
-  for (let n = 1; n <= ring.length; n++) {
-    const a = ring[(start + n - 1) % ring.length];
-    const b = ring[(start + n) % ring.length];
-    const length = Math.hypot(b.x - a.x, b.y - a.y);
-    let along = stitchLength - carried;
-    while (along < length) {
-      const t = along / length;
-      points.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
-      along += stitchLength;
-    }
-    carried = length - (along - stitchLength);
-    // Keep sharp corners as needle points so outlines stay crisp
-    const c = ring[(start + n + 1) % ring.length];
-    const turn = Math.abs(
-      Math.atan2(
-        (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x),
-        (b.x - a.x) * (c.x - b.x) + (b.y - a.y) * (c.y - b.y),
-      ),
-    );
-    const sharpCorner = turn > Math.PI / 6 && carried > stitchLength / 4;
-    if (sharpCorner || n === ring.length) {
-      points.push(b);
-      carried = 0;
-    }
-  }
-  return points;
+  const closed = [...ring.slice(start), ...ring.slice(0, start), ring[start]];
+  return runAlongPath(closed, stitchLength);
 }
 
 /**

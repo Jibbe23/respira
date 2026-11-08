@@ -6,6 +6,7 @@
 
 import type { Point } from "./fillStitches";
 import { nearestPaletteIndex, type RGBA } from "./traceImage";
+import type { TravelGraph } from "./travel";
 
 export interface CrossCell {
   col: number;
@@ -159,4 +160,51 @@ export function crossStitchRuns(
     }
     return points;
   });
+}
+
+/**
+ * Travel graph for cross stitch: the corners of the cells, connected by the
+ * lines the crosses sew anyway (both diagonals and the vertical edges). Travel
+ * along them lies on thread of the same color and does not show.
+ */
+export function createCrossTravelGraph(
+  cells: CrossCell[],
+  cellSize: number,
+): TravelGraph {
+  const graph: TravelGraph = { nodes: [], edges: [] };
+  const ids = new Map<string, number>();
+  const corner = (cell: CrossCell, dc: number, dr: number) => {
+    const key = `${cell.col + dc},${cell.row + dr}`;
+    let id = ids.get(key);
+    if (id === undefined) {
+      id = graph.nodes.length;
+      ids.set(key, id);
+      graph.nodes.push({
+        x: cell.x + dc * cellSize,
+        y: cell.y + dr * cellSize,
+      });
+      graph.edges.push([]);
+    }
+    return id;
+  };
+  const link = (a: number, b: number) => {
+    const cost = Math.hypot(
+      graph.nodes[a].x - graph.nodes[b].x,
+      graph.nodes[a].y - graph.nodes[b].y,
+    );
+    // Shared cell edges are added twice; the duplicate does no harm
+    graph.edges[a].push({ to: b, cost, path: [graph.nodes[b]] });
+    graph.edges[b].push({ to: a, cost, path: [graph.nodes[a]] });
+  };
+  for (const cell of cells) {
+    const topLeft = corner(cell, 0, 0);
+    const topRight = corner(cell, 1, 0);
+    const bottomLeft = corner(cell, 0, 1);
+    const bottomRight = corner(cell, 1, 1);
+    link(topLeft, bottomRight);
+    link(topRight, bottomLeft);
+    link(topLeft, bottomLeft);
+    link(topRight, bottomRight);
+  }
+  return graph;
 }
