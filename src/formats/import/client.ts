@@ -301,6 +301,48 @@ class PatternConverterClient {
   }
 
   /**
+   * Write a pattern's stitches and threads as a PES file (needs the worker
+   * to be initialized, like the import)
+   */
+  async writePes(
+    pattern: Pick<PesPatternData, "stitches" | "threads">,
+  ): Promise<Uint8Array> {
+    const worker = this.worker;
+    if (this.state !== "ready" || !worker) {
+      throw new Error(
+        "Pyodide worker not initialized. Call initialize() first.",
+      );
+    }
+    return new Promise<Uint8Array>((resolve, reject) => {
+      const handleMessage = (event: MessageEvent<WorkerResponse>) => {
+        const message = event.data;
+        if (message.type === "WRITE_PES_COMPLETE") {
+          worker.removeEventListener("message", handleMessage);
+          resolve(message.data);
+        } else if (message.type === "WRITE_PES_ERROR") {
+          worker.removeEventListener("message", handleMessage);
+          reject(new Error(message.error));
+        }
+      };
+      worker.addEventListener("message", handleMessage);
+      const writeMessage: WorkerMessage = {
+        type: "WRITE_PES",
+        stitches: pattern.stitches,
+        threads: pattern.threads.map(
+          ({ hex, brand, catalogNumber, description, chart }) => ({
+            hex,
+            brand,
+            catalogNumber,
+            description,
+            chart,
+          }),
+        ),
+      };
+      worker.postMessage(writeMessage);
+    });
+  }
+
+  /**
    * Setup worker event listeners
    */
   private setupWorkerListeners() {

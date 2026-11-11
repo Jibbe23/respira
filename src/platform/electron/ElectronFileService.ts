@@ -3,6 +3,14 @@ import type { IFileService } from "../interfaces/IFileService";
 /**
  * Electron implementation of file service using native dialogs via IPC
  */
+/** Save dialog filter for the extension of `name` (e.g. PES Files) */
+export function saveFilters(name: string) {
+  const extension = /\.([a-z0-9]+)$/i.exec(name)?.[1]?.toLowerCase();
+  return extension
+    ? [{ name: `${extension.toUpperCase()} Files`, extensions: [extension] }]
+    : [];
+}
+
 export class ElectronFileService implements IFileService {
   async openFileDialog(): Promise<File | null> {
     if (!window.electronAPI) {
@@ -50,7 +58,7 @@ export class ElectronFileService implements IFileService {
         {
           defaultPath: defaultName,
           filters: [
-            { name: "PEN Files", extensions: ["pen"] },
+            ...saveFilters(defaultName),
             { name: "All Files", extensions: ["*"] },
           ],
         },
