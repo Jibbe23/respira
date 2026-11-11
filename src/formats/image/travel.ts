@@ -11,6 +11,7 @@
 import {
   fillRowCrossings,
   runAlongPath,
+  type FillRule,
   type Point,
   type Ring,
   type RingPosition,
@@ -58,6 +59,7 @@ export function createTravelGraph(
   rings: Ring[],
   angle: number,
   spacing: number,
+  rule: FillRule = "evenodd",
 ): TravelGraph {
   const graph: TravelGraph = { nodes: [], edges: [], rings };
   const addNode = (p: Point) => {
@@ -87,7 +89,7 @@ export function createTravelGraph(
     onRing[at.ring].push({ at: at.edge + at.t, node });
     return node;
   };
-  for (const [start, end] of fillRowCrossings(rings, angle, spacing)) {
+  for (const [start, end] of fillRowCrossings(rings, angle, spacing, rule)) {
     link(nodeAt(start), nodeAt(end), ROW_TRAVEL_COST);
   }
   for (const list of onRing) {

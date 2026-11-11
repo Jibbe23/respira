@@ -19,7 +19,16 @@ export interface FillOptions {
   stitchLength: number; // maximum stitch length along a row
   // Shortens every row at both ends (keeps underlay inside the top stitches)
   inset?: number;
+  // "nonzero" for rings from offsetRings (they may overlap themselves)
+  rule?: FillRule;
 }
+
+/**
+ * Which points are inside: "evenodd" (any ring direction), or "nonzero" for
+ * rings with outer rings counter-clockwise and holes clockwise (math
+ * orientation), where parts of a ring that overlap stay filled
+ */
+export type FillRule = "evenodd" | "nonzero";
 
 /** Point on ring `ring`, on the edge from vertex `edge` to the next, at fraction `t` */
 export interface RingPosition {
@@ -68,27 +77,50 @@ function signedArea(ring: Ring): number {
 
 /**
  * Grow a region by `distance` in all directions: the outer ring moves out,
- * holes get smaller (holes too small to keep are dropped). Each vertex moves
- * along the bisector of its two edges.
+ * holes get smaller (holes narrower than 2 x distance are dropped). Each
+ * vertex moves along the bisector of its two edges. Where the grown ring
+ * overlaps itself (narrow notches), fill with the "nonzero" rule.
  */
+/**
+ * Is a hole too narrow to stay open when the area grows by `distance`?
+ * Width estimated as 2 x area / perimeter (exact for long strips, half the
+ * side for squares, where the hole closes at the same distance)
+ */
+export function holeClosesAt(hole: Ring, distance: number): boolean {
+  let perimeter = 0;
+  for (let i = 0; i < hole.length; i++) {
+    const a = hole[i];
+    const b = hole[(i + 1) % hole.length];
+    perimeter += Math.hypot(b.x - a.x, b.y - a.y);
+  }
+  return (
+    (2 * Math.abs(signedArea(hole))) / Math.max(1e-9, perimeter) < distance
+  );
+}
+
 export function offsetRings(rings: Ring[], distance: number): Ring[] {
   const result: Ring[] = [];
-  rings.forEach((ring, index) => {
+  rings.forEach((input, index) => {
+    // Repeated points have no direction (their normal would be zero)
+    const ring = input.filter((p, i) => {
+      const prev = input[(i - 1 + input.length) % input.length];
+      return Math.hypot(p.x - prev.x, p.y - prev.y) > 1e-6;
+    });
     const area = signedArea(ring);
     if (ring.length < 3 || area === 0) return;
     const isHole = index > 0;
-    if (isHole && Math.abs(area) < (4 * distance) ** 2) return;
+    if (isHole && holeClosesAt(ring, distance)) return;
     // Normal pointing away from the filled area: out of the outer ring,
     // into a hole
     const side = (area > 0 ? 1 : -1) * (isHole ? -1 : 1);
     const normal = (a: Point, b: Point) => {
-      const length = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      const length = Math.hypot(b.x - a.x, b.y - a.y);
       return {
         x: (side * (b.y - a.y)) / length,
         y: (side * -(b.x - a.x)) / length,
       };
     };
-    const moved = ring.map((p, i) => {
+    let moved = ring.map((p, i) => {
       const prev = ring[(i - 1 + ring.length) % ring.length];
       const next = ring[(i + 1) % ring.length];
       const n1 = normal(prev, p);
@@ -107,8 +139,8 @@ export function offsetRings(rings: Ring[], distance: number): Ring[] {
       const scale = distance / Math.max(0.5, mx * n1.x + my * n1.y);
       return { x: p.x + mx * scale, y: p.y + my * scale };
     });
-    // A hole that turned inside out is gone
-    if (isHole && Math.sign(signedArea(moved)) !== Math.sign(area)) return;
+    // Outer rings counter-clockwise, holes clockwise (for the nonzero rule)
+    if (signedArea(moved) > 0 === isHole) moved = moved.reverse();
     result.push(moved);
   });
   return result;
@@ -125,7 +157,7 @@ export function regionArea(rings: Ring[]): number {
 }
 
 /**
- * Horizontal scanline segments inside the rings (even-odd rule), with the
+ * Horizontal scanline segments inside the rings (see FillRule), with the
  * rings rotated so that rows run along `angle`
  */
 function scanlineSegments(
@@ -134,6 +166,7 @@ function scanlineSegments(
   sin: number,
   spacing: number,
   inset: number,
+  rule: FillRule = "evenodd",
 ): Segment[] {
   const rotated = rings.map((ring) => ring.map((p) => rotate(p, cos, sin)));
   let minY = Infinity;
@@ -148,7 +181,7 @@ function scanlineSegments(
   const segments: Segment[] = [];
   let row = 0;
   for (let y = minY + spacing / 2; y < maxY; y += spacing, row++) {
-    const xs: { x: number; position: RingPosition }[] = [];
+    const xs: { x: number; up: number; position: RingPosition }[] = [];
     rotated.forEach((ring, r) => {
       for (let i = 0; i < ring.length; i++) {
         const a = ring[i];
@@ -158,15 +191,30 @@ function scanlineSegments(
           const t = (y - a.y) / (b.y - a.y);
           xs.push({
             x: a.x + t * (b.x - a.x),
+            up: b.y > a.y ? 1 : -1,
             position: { ring: r, edge: i, t },
           });
         }
       }
     });
     xs.sort((p, q) => p.x - q.x);
-    for (let i = 0; i + 1 < xs.length; i += 2) {
+    // Pairs of crossings that enter and leave the inside
+    const spans: [number, number][] = [];
+    if (rule === "evenodd") {
+      for (let i = 0; i + 1 < xs.length; i += 2) spans.push([i, i + 1]);
+    } else {
+      let winding = 0;
+      let from = 0;
+      xs.forEach((crossing, i) => {
+        const before = winding;
+        winding += crossing.up;
+        if (before === 0 && winding !== 0) from = i;
+        if (before !== 0 && winding === 0) spans.push([from, i]);
+      });
+    }
+    for (const [i, j] of spans) {
       const x0 = xs[i].x + inset;
-      const x1 = xs[i + 1].x - inset;
+      const x1 = xs[j].x - inset;
       if (x1 - x0 >= 1) {
         segments.push({
           row,
@@ -174,7 +222,7 @@ function scanlineSegments(
           x0,
           x1,
           start: xs[i].position,
-          end: xs[i + 1].position,
+          end: xs[j].position,
         });
       }
     }
@@ -270,6 +318,7 @@ export function tatamiFill(rings: Ring[], options: FillOptions): Point[][] {
     sin,
     options.spacing,
     options.inset ?? 0,
+    options.rule,
   );
 
   const maxStitch = (options.stitchLength * 4) / 3;
@@ -313,6 +362,7 @@ export function fillRowCrossings(
   rings: Ring[],
   angle: number,
   spacing: number,
+  rule: FillRule = "evenodd",
 ): [RingPosition, RingPosition][] {
   const rad = (angle * Math.PI) / 180;
   return scanlineSegments(
@@ -321,6 +371,7 @@ export function fillRowCrossings(
     Math.sin(-rad),
     spacing,
     0,
+    rule,
   ).map((s) => [s.start, s.end]);
 }
 

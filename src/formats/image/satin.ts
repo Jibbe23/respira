@@ -660,15 +660,3 @@ export function sewSatin(
   }
   return runs;
 }
-
-/** planSatin and sewSatin in one go */
-export function satinStitches(
-  rings: Ring[],
-  start: Point | null,
-  options: SatinOptions,
-): Point[][] | null {
-  const plan = planSatin(rings, options);
-  if (!plan) return null;
-  const runs = sewSatin(plan, start, options);
-  return runs.length > 0 ? runs : null;
-}

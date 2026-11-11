@@ -23,6 +23,7 @@ import {
 import {
   tatamiFill,
   offsetRings,
+  holeClosesAt,
   runAroundRing,
   repeatClosedRun,
   regionArea,
@@ -88,8 +89,8 @@ const TRAVEL_STITCH_LENGTH = 25;
 const TRAVEL_GRAPH_SPACING = 15;
 
 /**
- * Room kept when fitting the height (1 mm): fill and satin reach past the
- * edges on both sides, lock stitches a little more
+ * Room kept when fitting width and height (1 mm): fill and satin reach past
+ * the edges on both sides, lock stitches a little more
  */
 const FIT_MARGIN = 10;
 
@@ -313,7 +314,7 @@ function groupRegionsByThread(
   }
   // Lock stitches reach a little beyond the outline
   const scale = Math.min(
-    (options.widthMm * 10) / Math.max(1, maxX - minX),
+    (options.widthMm * 10 - FIT_MARGIN) / Math.max(1, maxX - minX),
     options.maxHeightMm
       ? (options.maxHeightMm * 10 - FIT_MARGIN) / Math.max(1, maxY - minY)
       : Infinity,
@@ -399,36 +400,50 @@ const satinOptions = (options: ImageToPatternOptions) => ({
   spacing: SATIN_SPACING[options.density],
 });
 
+/** Share of a thread sewn in satin from which its lines get their own block */
+const SPLIT_LINE_SHARE = 0.25;
+
 /**
- * Sewing order: threads that are mostly lines sewn in satin (lettering,
- * contour lines) come last, so they lie on top of the edges of the areas;
- * the other threads keep their order (largest first). Decided per thread,
- * not per region: a few narrow strips of an area color would otherwise
- * need a second block and an extra thread change.
+ * Sewing order: lines sewn in satin (lettering, contour lines) come after
+ * all areas, so they lie on top of the area edges; areas keep their order
+ * (largest thread first). A thread that is mostly lines moves to the end as
+ * a whole; one with a fair share of both is split into an area block and a
+ * line block; a few narrow strips of an area color stay with it (no extra
+ * thread change for them).
  */
 function orderForSewing(
   groups: ThreadGroup<Ring[]>[],
   options: ImageToPatternOptions,
 ): { groups: ThreadGroup<Ring[]>[]; satin: Map<Ring[], SatinPlan> } {
   const satin = new Map<Ring[], SatinPlan>();
-  const isLines = new Set<ThreadGroup<Ring[]>>();
+  const areas: ThreadGroup<Ring[]>[] = [];
+  const lines: ThreadGroup<Ring[]>[] = [];
   for (const group of groups) {
-    let satinArea = 0;
+    const line: ThreadGroup<Ring[]> = {
+      color: group.color,
+      items: [],
+      area: 0,
+    };
+    const area: ThreadGroup<Ring[]> = {
+      color: group.color,
+      items: [],
+      area: 0,
+    };
     for (const rings of group.items) {
       const plan = planSatin(rings, satinOptions(options));
-      if (!plan) continue;
-      satin.set(rings, plan);
-      satinArea += regionArea(rings);
+      if (plan) satin.set(rings, plan);
+      const target = plan ? line : area;
+      target.items.push(rings);
+      target.area += regionArea(rings);
     }
-    if (satinArea > group.area / 2) isLines.add(group);
+    const share = line.area / Math.max(1, group.area);
+    if (share > 0.5) lines.push(group);
+    else if (share >= SPLIT_LINE_SHARE) {
+      areas.push(area);
+      lines.push(line);
+    } else areas.push(group);
   }
-  return {
-    groups: [
-      ...groups.filter((g) => !isLines.has(g)),
-      ...groups.filter((g) => isLines.has(g)),
-    ],
-    satin,
-  };
+  return { groups: [...areas, ...lines], satin };
 }
 
 /** Tatami stitches: per region underlay, fill and outline */
@@ -465,7 +480,9 @@ function regionsToStitches(
         sewRuns: (runs: Point[][]) => void,
         repeats: Repeats,
       ) => {
-        for (const ring of rings) {
+        for (const [i, ring] of rings.entries()) {
+          // Holes too small to stay open under the grown fill get none
+          if (i > 0 && holeClosesAt(ring, FILL_PULL_COMPENSATION)) continue;
           const outline = runAroundRing(
             ring,
             OUTLINE_STITCH_LENGTH,
@@ -493,7 +510,7 @@ function regionsToStitches(
             // A satin run is underlay out, satin back: never reversed
             allowReverse: false,
           }).forEach(sew);
-        sewOutline(sewInside, 1);
+        sewOutline(sewInside, options.outlineRepeats);
         sewInside(sewSatin(plan, writer.position, satinOptions(options)));
         continue;
       }
@@ -506,6 +523,7 @@ function regionsToStitches(
         fillRings,
         FILL_ANGLE,
         TRAVEL_GRAPH_SPACING,
+        "nonzero",
       );
       const sewBlocks = (blocks: Point[][]) =>
         connectBlocks(blocks, graph, writer.position, {
@@ -518,6 +536,7 @@ function regionsToStitches(
       sewBlocks(
         tatamiFill(fillRings, {
           angle: FILL_ANGLE,
+          rule: "nonzero",
           spacing: ROW_SPACING[options.density],
           stitchLength: FILL_STITCH_LENGTH,
         }),

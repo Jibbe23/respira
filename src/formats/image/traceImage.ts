@@ -58,13 +58,17 @@ function mixedPixels({ data, width, height }: ImageData): Uint8Array {
   const mixed = new Uint8Array(width * height);
   const isMix = (i: number, a: number, b: number) => {
     if (data[a + 3] < 128 || data[b + 3] < 128) return false;
-    const d = [0, 1, 2].map((k) => data[b + k] - data[a + k]);
-    const length2 = d[0] ** 2 + d[1] ** 2 + d[2] ** 2;
+    const dr = data[b] - data[a];
+    const dg = data[b + 1] - data[a + 1];
+    const db = data[b + 2] - data[a + 2];
+    const length2 = dr * dr + dg * dg + db * db;
     if (length2 < MIN_EDGE_CONTRAST ** 2) return false;
-    const p = [0, 1, 2].map((k) => data[i + k] - data[a + k]);
-    const t = (p[0] * d[0] + p[1] * d[1] + p[2] * d[2]) / length2;
+    const pr = data[i] - data[a];
+    const pg = data[i + 1] - data[a + 1];
+    const pb = data[i + 2] - data[a + 2];
+    const t = (pr * dr + pg * dg + pb * db) / length2;
     if (t < 0.1 || t > 0.9) return false;
-    const off = Math.hypot(...[0, 1, 2].map((k) => p[k] - t * d[k]));
+    const off = Math.hypot(pr - t * dr, pg - t * dg, pb - t * db);
     return off < Math.max(12, 0.25 * Math.sqrt(length2));
   };
   for (let y = 1; y < height - 1; y++) {
@@ -86,7 +90,9 @@ function mixedPixels({ data, width, height }: ImageData): Uint8Array {
  * mix their neighbours' colors are not counted: scaling an image mixes colors
  * along every edge, and the gray along black lines on white would otherwise
  * take the place of a real color. Thin lines still count with their own
- * color. A transparent entry is added when the image has transparent pixels.
+ * color, unless a 1 px line has a color between its neighbours' (it cannot
+ * be told apart from an edge). A transparent entry is added when the image
+ * has transparent pixels.
  */
 export function quantizePalette(imageData: ImageData, colors: number): RGBA[] {
   const { data } = imageData;

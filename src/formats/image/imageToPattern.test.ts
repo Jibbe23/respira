@@ -415,17 +415,43 @@ describe("imageToPattern", () => {
     }
   });
 
+  it("sews the lines of a thread with large areas too after all areas", () => {
+    // Black: a large square and thin lines (about a third of its area);
+    // red: a square
+    const BLACK: Pixel = [0, 0, 0, 255];
+    const image = makeImage(300, 200, (x, y) => {
+      if (x >= 10 && x < 80 && y >= 10 && y < 80) return BLACK;
+      if (x >= 220 && x < 260 && y >= 80 && y < 120) return RED;
+      if (x >= 100 && x < 196 && y >= 10 && y < 120 && x % 12 < 4) {
+        return BLACK;
+      }
+      return WHITE;
+    });
+    const { threads } = imageToPattern(image, {
+      colors: 2,
+      widthMm: 90,
+      removeBackground: true,
+      ...TATAMI,
+    })!;
+    expect(threads.map((t) => t.description)).toEqual([
+      "BLACK",
+      expect.stringMatching(/RED|CARMINE/i),
+      "BLACK",
+    ]);
+  });
+
   it("fills areas a little past their edge against gaps", () => {
-    // The square on the left defines the left edge at -30 mm
     const { stitches } = imageToPattern(logo, {
       colors: 2,
       widthMm: 60,
       removeBackground: true,
       ...TATAMI,
     })!;
-    const minX = Math.min(...stitches.map((s) => s[0]));
-    expect(minX).toBeLessThanOrEqual(-302);
-    expect(minX).toBeGreaterThan(-306);
+    const xs = stitches.map((s) => s[0]);
+    // The outline keeps 0.5 mm room on each side (left edge at -29.5 mm),
+    // the fill reaches 0.3 mm past it, and all stays within the 60 mm
+    expect(Math.min(...xs)).toBeLessThanOrEqual(-297.5);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeLessThanOrEqual(600);
   });
 
   it("sews lines last, on top of the areas", () => {
@@ -504,6 +530,51 @@ describe("offsetRings", () => {
       expect(points.some((p) => sx * (p.x - 50) + sy * (p.y - 50) > 50.2)).toBe(
         true,
       );
+    }
+  });
+
+  it("fills across a notch where the grown ring overlaps itself", () => {
+    // U shape with a 0.4 mm slit between its arms: grown by 0.3 mm the arms
+    // overlap; the nonzero rule keeps the overlap filled
+    const u = [
+      { x: 0, y: 0 },
+      { x: 48, y: 0 },
+      { x: 48, y: 80 },
+      { x: 52, y: 80 },
+      { x: 52, y: 0 },
+      { x: 100, y: 0 },
+      { x: 100, y: 100 },
+      { x: 0, y: 100 },
+    ];
+    const blocks = tatamiFill(offsetRings([u], 3), {
+      angle: 45,
+      spacing: 4,
+      stitchLength: 40,
+      rule: "nonzero",
+    });
+    // Every point of the arms near the slit lies on or between fill rows:
+    // its nearest stitch is closer than the row spacing
+    const stitches = blocks.flatMap((b) => b.slice(1).map((p, i) => [b[i], p]));
+    for (const p of [
+      { x: 44, y: 40 },
+      { x: 56, y: 40 },
+      { x: 50, y: 90 },
+    ]) {
+      const nearest = Math.min(
+        ...stitches.map(([a, b]) => {
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const t = Math.max(
+            0,
+            Math.min(
+              1,
+              ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1),
+            ),
+          );
+          return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+        }),
+      );
+      expect(nearest).toBeLessThan(4);
     }
   });
 
