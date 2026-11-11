@@ -13,6 +13,7 @@ import {
 } from "./fillStitches";
 import { createTravelGraph, connectBlocks } from "./travel";
 import { MOVE } from "../import/constants";
+import { quantizePalette } from "./traceImage";
 
 type Pixel = [number, number, number, number];
 
@@ -402,6 +403,39 @@ describe("imageToPattern", () => {
     expect(across.length).toBeGreaterThan(stitches.length * 0.6);
   });
 
+  it("fills areas a little past their edge against gaps", () => {
+    // The square on the left defines the left edge at -30 mm
+    const { stitches } = imageToPattern(logo, {
+      colors: 2,
+      widthMm: 60,
+      removeBackground: true,
+      ...TATAMI,
+    })!;
+    const minX = Math.min(...stitches.map((s) => s[0]));
+    expect(minX).toBeLessThanOrEqual(-302);
+    expect(minX).toBeGreaterThan(-306);
+  });
+
+  it("sews lines last, on top of the areas", () => {
+    // Many thin black lines (more area than the red square) and a square
+    const BLACK: Pixel = [0, 0, 0, 255];
+    const image = makeImage(300, 200, (x, y) => {
+      if (x >= 200 && x < 240 && y >= 80 && y < 120) return RED;
+      if (x < 180 && y >= 10 && y < 190 && x % 12 < 4) return BLACK;
+      return WHITE;
+    });
+    const { threads } = imageToPattern(image, {
+      colors: 2,
+      widthMm: 90,
+      removeBackground: true,
+      ...TATAMI,
+    })!;
+    expect(threads.map((t) => t.description)).toEqual([
+      expect.stringMatching(/RED|CARMINE/i),
+      "BLACK",
+    ]);
+  });
+
   it("returns null when only the background is left", () => {
     const blank = makeImage(40, 40, () => WHITE);
     expect(
@@ -531,5 +565,27 @@ describe("cross stitch", () => {
       );
       expect(d).toBeLessThanOrEqual(30 * Math.SQRT2 + 1.5);
     }
+  });
+});
+
+describe("quantizePalette", () => {
+  it("ignores the mixed colors along edges of a scaled image", () => {
+    // Black lines with gray (anti-aliased) edges, and two close light
+    // colors that must both get a palette entry
+    const CREAM: Pixel = [241, 232, 216, 255];
+    const SKIN: Pixel = [242, 218, 203, 255];
+    const image = makeImage(200, 200, (x, y) => {
+      if (y >= 120) return x < 100 ? CREAM : SKIN;
+      const m = x % 10;
+      if (m === 4) return [0, 0, 0, 255];
+      if (m === 3 || m === 5) return [128, 128, 128, 255];
+      return WHITE;
+    });
+    const palette = quantizePalette(image, 4).map((c) => [c.r, c.g, c.b]);
+    const near = (target: number[]) =>
+      palette.some((c) => c.every((v, k) => Math.abs(v - target[k]) < 8));
+    expect(near([241, 232, 216])).toBe(true);
+    expect(near([242, 218, 203])).toBe(true);
+    expect(near([128, 128, 128])).toBe(false);
   });
 });

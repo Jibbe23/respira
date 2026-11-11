@@ -46,15 +46,47 @@ interface TracePath {
 const BACKGROUND_BORDER_SHARE = 0.6;
 /** k-means rounds for the palette */
 const PALETTE_ITERATIONS = 10;
+/** A pixel counts as flat when its neighbours differ by at most this (RGB sum) */
+const FLAT_DIFFERENCE = 30;
+/** Below this share of flat pixels (photos, noise) all pixels count */
+const MIN_FLAT_SHARE = 0.2;
 
 /**
  * Palette of `colors` colors for the opaque pixels: k-means on a 5-bit color
  * histogram, seeded with frequent colors that are far apart from each other
- * (so anti-aliased edge pixels do not get a color of their own). A
- * transparent entry is added when the image has transparent pixels.
+ * (so anti-aliased edge pixels do not get a color of their own). Only flat
+ * pixels (neighbours of the same color) are counted: scaling an image mixes
+ * colors along every edge, and a thin black line on white would otherwise
+ * make a gray that takes the place of a real color. A transparent entry is
+ * added when the image has transparent pixels.
  */
 export function quantizePalette(imageData: ImageData, colors: number): RGBA[] {
-  const { data } = imageData;
+  const { data, width, height } = imageData;
+  const differs = (i: number, j: number) =>
+    Math.abs(data[i] - data[j]) +
+      Math.abs(data[i + 1] - data[j + 1]) +
+      Math.abs(data[i + 2] - data[j + 2]) >
+    FLAT_DIFFERENCE;
+  const isFlat = (i: number) => {
+    const p = i / 4;
+    const x = p % width;
+    const y = (p - x) / width;
+    return (
+      (x === 0 || !differs(i, i - 4)) &&
+      (x === width - 1 || !differs(i, i + 4)) &&
+      (y === 0 || !differs(i, i - width * 4)) &&
+      (y === height - 1 || !differs(i, i + width * 4))
+    );
+  };
+  let opaque = 0;
+  let flat = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 128) continue;
+    opaque++;
+    if (isFlat(i)) flat++;
+  }
+  const onlyFlat = flat >= opaque * MIN_FLAT_SHARE;
+
   const bins = new Map<
     number,
     { n: number; r: number; g: number; b: number }
@@ -65,6 +97,7 @@ export function quantizePalette(imageData: ImageData, colors: number): RGBA[] {
       transparent = true;
       continue;
     }
+    if (onlyFlat && !isFlat(i)) continue;
     const key =
       ((data[i] >> 3) << 10) | ((data[i + 1] >> 3) << 5) | (data[i + 2] >> 3);
     const bin = bins.get(key) ?? { n: 0, r: 0, g: 0, b: 0 };

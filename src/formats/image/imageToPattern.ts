@@ -57,7 +57,12 @@ export interface ImageToPatternOptions {
 }
 
 /** Stitch parameters (0.1 mm units) */
-const ROW_SPACING: Record<FillDensity, number> = { normal: 4.5, dense: 3.5 };
+const ROW_SPACING: Record<FillDensity, number> = { normal: 4, dense: 3.4 };
+/**
+ * Fill rows reach this far past the edge: the fabric pulls them in, and
+ * neighbouring areas overlap instead of leaving a gap (0.3 mm)
+ */
+const FILL_PULL_COMPENSATION = 3;
 /** Satin for strokes up to 5 mm wide (lettering, contour lines) */
 const SATIN = { pullCompensation: 2, underlayStitch: 20, maxWidth: 50 };
 const SATIN_SPACING: Record<FillDensity, number> = { normal: 4, dense: 3 };
@@ -385,10 +390,45 @@ function createStitchWriter(maxTravel: number) {
   };
 }
 
+const satinOptions = (options: ImageToPatternOptions) => ({
+  ...SATIN,
+  spacing: SATIN_SPACING[options.density],
+});
+
+/**
+ * Regions sewn in satin, and the groups in sewing order: areas first, lines
+ * (groups mostly in satin, e.g. black contours and lettering) last, so they
+ * lie on top of the edges of the areas
+ */
+function planSatin(
+  groups: ThreadGroup<Ring[]>[],
+  options: ImageToPatternOptions,
+): { groups: ThreadGroup<Ring[]>[]; satinRegions: Set<Ring[]> } {
+  const satinRegions = new Set<Ring[]>();
+  const lineShare = new Map<ThreadGroup<Ring[]>, number>();
+  for (const group of groups) {
+    let satinArea = 0;
+    for (const rings of group.items) {
+      if (satinStitches(rings, null, satinOptions(options))) {
+        satinRegions.add(rings);
+        satinArea += regionArea(rings);
+      }
+    }
+    lineShare.set(group, satinArea / Math.max(1, group.area));
+  }
+  const isLines = (g: ThreadGroup<Ring[]>) => lineShare.get(g)! > 0.5;
+  return {
+    // Stable: areas keep their order (largest first), then lines
+    groups: [...groups.filter((g) => !isLines(g)), ...groups.filter(isLines)],
+    satinRegions,
+  };
+}
+
 /** Tatami stitches: per region underlay, fill and outline */
 function regionsToStitches(
   groups: ThreadGroup<Ring[]>[],
   options: ImageToPatternOptions,
+  satinRegions: Set<Ring[]>,
 ): number[][] {
   const writer = createStitchWriter(MAX_TRAVEL_STITCH);
   groups.forEach((group, colorIndex) => {
@@ -414,10 +454,9 @@ function regionsToStitches(
       const [rings] = remaining.splice(index, 1);
 
       // Narrow shapes: satin across the stroke instead of a tatami fill
-      const satin = satinStitches(rings, writer.position, {
-        ...SATIN,
-        spacing: SATIN_SPACING[options.density],
-      });
+      const satin = satinRegions.has(rings)
+        ? satinStitches(rings, writer.position, satinOptions(options))
+        : null;
       if (satin) {
         satin.forEach(sew);
         continue;
@@ -437,6 +476,7 @@ function regionsToStitches(
       sewBlocks(
         tatamiFill(rings, {
           angle: FILL_ANGLE,
+          inset: -FILL_PULL_COMPENSATION,
           spacing: ROW_SPACING[options.density],
           stitchLength: FILL_STITCH_LENGTH,
         }),
@@ -536,9 +576,12 @@ export function imageToPattern(
     stitches = cellsToStitches(cellGroups, options);
   } else {
     const regions = traceImage(image, traced.palette, traced.backgroundIndex);
-    const regionGroups = groupRegionsByThread(regions, traced.threads, options);
-    groups = regionGroups;
-    stitches = regionsToStitches(regionGroups, options);
+    const plan = planSatin(
+      groupRegionsByThread(regions, traced.threads, options),
+      options,
+    );
+    groups = plan.groups;
+    stitches = regionsToStitches(plan.groups, options, plan.satinRegions);
   }
   stitches = roundStitches(stitches);
   if (stitches.length < 2) return null;
