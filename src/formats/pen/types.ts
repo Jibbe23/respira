@@ -42,6 +42,9 @@ export interface PenColorBlock {
 export interface DecodedPenData {
   stitches: DecodedPenStitch[];
   colorBlocks: PenColorBlock[];
+  // Stitch indices where the machine pauses after a cut without a new color
+  // (COLOR_END stitches that do not end a color block)
+  trimStops?: number[]; // missing in patterns saved before
   bounds: {
     minX: number;
     maxX: number;

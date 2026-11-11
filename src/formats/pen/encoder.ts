@@ -27,8 +27,17 @@ export interface StitchData {
   colorIndex: number;
 }
 
+export interface EncodeOptions {
+  // Pause after every thread cut (encoded as a color change to the same
+  // color), so the thread can be held when the needle starts again
+  stopAfterTrim?: boolean;
+}
+
 export interface PenEncodingResult {
   penBytes: number[];
+  // PEN stitch indices of the stops added by `stopAfterTrim` (COLOR_END
+  // without a new color)
+  trimStops: number[];
   bounds: {
     minX: number;
     maxX: number;
@@ -166,13 +175,34 @@ export function generateLockStitches(
   return lockBytes;
 }
 
+/** One PEN stitch with X flags (low 3 bits) and Y flags */
+function encodeFlagged(
+  x: number,
+  y: number,
+  xFlags: number,
+  yFlags: number,
+): number[] {
+  const xEncoded = ((x << 3) & 0xfff8) | xFlags;
+  const yEncoded = ((y << 3) & 0xffff) | yFlags;
+  return [
+    xEncoded & 0xff,
+    (xEncoded >> 8) & 0xff,
+    yEncoded & 0xff,
+    (yEncoded >> 8) & 0xff,
+  ];
+}
+
 /**
  * Encode stitches array to PEN format bytes
  *
  * @param stitches Array of stitches in format [x, y, cmd, colorIndex]
- * @returns PEN encoding result with bytes and bounds
+ * @param options See EncodeOptions
+ * @returns PEN encoding result with bytes, added stops and bounds
  */
-export function encodeStitchesToPen(stitches: number[][]): PenEncodingResult {
+export function encodeStitchesToPen(
+  stitches: number[][],
+  { stopAfterTrim = false }: EncodeOptions = {},
+): PenEncodingResult {
   // Track bounds
   let minX = Infinity;
   let maxX = -Infinity;
@@ -180,6 +210,9 @@ export function encodeStitchesToPen(stitches: number[][]): PenEncodingResult {
   let maxY = -Infinity;
 
   const penStitches: number[] = [];
+  const trimStops: number[] = [];
+  // A stop was added and no stitch has been sewn since (no second stop then)
+  let stoppedSinceStitch = false;
 
   // Track position for calculating jump distances
   let prevX = 0;
@@ -216,11 +249,21 @@ export function encodeStitchesToPen(stitches: number[][]): PenEncodingResult {
           ...generateLockStitches(prevX, prevY, finishDir.dirX, finishDir.dirY),
         );
 
-        // Encode jump with both FEED and CUT flags
+        if (stopAfterTrim && !stoppedSinceStitch) {
+          // Cut and pause at the current position (like a color change),
+          // then jump without cutting again
+          trimStops.push(penStitches.length / 4);
+          penStitches.push(
+            ...encodeFlagged(prevX, prevY, PEN_COLOR_END, PEN_CUT_DATA),
+          );
+          stoppedSinceStitch = true;
+        }
+
+        // Encode jump with FEED flag and CUT flag (unless already cut at a stop)
         const xEncoded = (absX << 3) & 0xffff;
         let yEncoded = (absY << 3) & 0xffff;
         yEncoded |= PEN_FEED_DATA; // Jump flag
-        yEncoded |= PEN_CUT_DATA; // Cut flag for long jumps
+        if (!stoppedSinceStitch) yEncoded |= PEN_CUT_DATA; // Cut flag for long jumps
 
         penStitches.push(
           xEncoded & 0xff,
@@ -273,7 +316,18 @@ export function encodeStitchesToPen(stitches: number[][]): PenEncodingResult {
     // Mark the very last stitch of the pattern with DATA_END
     if (isLastStitch) {
       xEncoded = (xEncoded & 0xfff8) | PEN_DATA_END;
+    } else if (
+      stopAfterTrim &&
+      cmd & TRIM &&
+      !isColorChange &&
+      !stoppedSinceStitch
+    ) {
+      // Cut from the file: pause here as well
+      xEncoded = (xEncoded & 0xfff8) | PEN_COLOR_END;
+      trimStops.push(penStitches.length / 4);
+      stoppedSinceStitch = true;
     }
+    if ((cmd & MOVE) === 0 && !(cmd & TRIM)) stoppedSinceStitch = false;
 
     // Add the encoded stitch
     penStitches.push(
@@ -383,6 +437,7 @@ export function encodeStitchesToPen(stitches: number[][]): PenEncodingResult {
 
   return {
     penBytes: penStitches,
+    trimStops,
     bounds: {
       minX: minX === Infinity ? 0 : minX,
       maxX: maxX === -Infinity ? 0 : maxX,

@@ -22,6 +22,8 @@ export interface UsePatternRotationUploadParams {
     offset: { x: number; y: number },
     fileName?: string,
   ) => void;
+  // Pause the machine after every thread cut
+  stopAfterTrim: boolean;
 }
 
 export interface UsePatternRotationUploadReturn {
@@ -52,6 +54,7 @@ export interface UsePatternRotationUploadReturn {
 export function usePatternRotationUpload({
   uploadPattern,
   setUploadedPattern,
+  stopAfterTrim,
 }: UsePatternRotationUploadParams): UsePatternRotationUploadReturn {
   const handleUpload = useCallback(
     async (
@@ -60,25 +63,28 @@ export function usePatternRotationUpload({
       patternOffset: { x: number; y: number },
       patternRotation: number,
     ) => {
-      let penDataToUpload = pesData.penData;
-      let pesDataForUpload = pesData;
+      // Always encode again: the stops after cuts depend on the setting
+      const stitches =
+        patternRotation && patternRotation !== 0
+          ? transformStitchesRotation(
+              pesData.stitches,
+              patternRotation,
+              pesData.bounds,
+            )
+          : pesData.stitches;
+      // Encode to PEN (this will round coordinates)
+      const penResult = encodeStitchesToPen(stitches, { stopAfterTrim });
+      const penDataToUpload = new Uint8Array(penResult.penBytes);
+      // Decode back to get the ACTUAL pattern (after PEN rounding)
+      const decoded = decodePenData(penDataToUpload, penResult.trimStops);
+      let pesDataForUpload: PesPatternData = {
+        ...pesData,
+        penData: penDataToUpload,
+        penStitches: decoded,
+      };
 
       // Apply rotation if needed
       if (patternRotation && patternRotation !== 0) {
-        // Transform stitches
-        const rotatedStitches = transformStitchesRotation(
-          pesData.stitches,
-          patternRotation,
-          pesData.bounds,
-        );
-
-        // Encode to PEN (this will round coordinates)
-        const penResult = encodeStitchesToPen(rotatedStitches);
-        penDataToUpload = new Uint8Array(penResult.penBytes);
-
-        // Decode back to get the ACTUAL pattern (after PEN rounding)
-        const decoded = decodePenData(penDataToUpload);
-
         // Calculate bounds from the DECODED stitches (the actual data that will be rendered)
         const rotatedBounds = calculateBoundsFromDecodedStitches(decoded);
 
@@ -103,7 +109,7 @@ export function usePatternRotationUpload({
         // Create rotated PesPatternData for upload
         pesDataForUpload = {
           ...pesData,
-          stitches: rotatedStitches,
+          stitches,
           penData: penDataToUpload,
           penStitches: decoded,
           bounds: rotatedBounds,
@@ -141,7 +147,7 @@ export function usePatternRotationUpload({
         // No need to pass originalPesData since it's the same as pesDataForUpload
       );
     },
-    [uploadPattern, setUploadedPattern],
+    [uploadPattern, setUploadedPattern, stopAfterTrim],
   );
 
   return {

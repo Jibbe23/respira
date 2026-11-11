@@ -137,13 +137,13 @@ export function getGuideContent(
       if (machineStatus === MachineStatus.COLOR_CHANGE_WAIT) {
         return {
           type: "warning",
-          title: "Thread Change Required",
+          title: "Machine Paused",
           description:
-            "The machine needs a different thread color to continue.",
+            "The machine waits for a thread change or paused after a thread cut.",
           items: [
-            "Check the color blocks section to see which thread is needed",
-            "Change to the correct thread color",
-            "Press the button on your machine to resume sewing",
+            "The Sewing Progress section shows which of the two it is",
+            "For a thread change, thread the new color shown there",
+            "Hold the end of the upper thread and press the button on your machine to resume sewing",
           ],
         };
       }

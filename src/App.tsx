@@ -149,9 +149,12 @@ function App() {
           originalPesData.bounds,
         );
 
-        const penResult = encodeStitchesToPen(rotatedStitches);
+        // Same stops as the upload, assuming the setting has not changed since
+        const penResult = encodeStitchesToPen(rotatedStitches, {
+          stopAfterTrim: useUIStore.getState().stopAfterTrim,
+        });
         const penData = new Uint8Array(penResult.penBytes);
-        const decoded = decodePenData(penData);
+        const decoded = decodePenData(penData, penResult.trimStops);
         const rotatedBounds = calculateBoundsFromDecodedStitches(decoded);
 
         // Calculate center shift using the same helper as store selectors

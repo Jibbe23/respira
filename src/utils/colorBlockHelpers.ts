@@ -59,3 +59,37 @@ export function findCurrentBlockIndex(
       currentStitch >= block.startStitch && currentStitch < block.endStitch,
   );
 }
+
+export type MachineStop =
+  | { kind: "trim" }
+  | { kind: "color"; nextBlock: ColorBlock | null };
+
+/**
+ * What the machine waits for when it reports a color change: a real thread
+ * change, or a pause after a cut (added by `stopAfterTrim`). The machine
+ * reports both the same way, so take the stop nearest to its stitch.
+ */
+export function classifyMachineStop(
+  colorBlocks: ColorBlock[],
+  currentStitch: number,
+  trimStops: readonly number[] = [],
+): MachineStop {
+  // A color block ends at its COLOR_END stitch (not the last block)
+  const stops = [
+    ...colorBlocks
+      .slice(0, -1)
+      .map((block) => ({ at: block.endStitch, kind: "color" as const })),
+    ...trimStops.map((at) => ({ at, kind: "trim" as const })),
+  ];
+  const distance = (at: number) => Math.abs(at - currentStitch);
+  const stop = stops.reduce<(typeof stops)[number] | null>(
+    (best, s) => (!best || distance(s.at) < distance(best.at) ? s : best),
+    null,
+  );
+
+  if (stop?.kind === "trim") return { kind: "trim" };
+  const nextBlock = stop
+    ? (colorBlocks.find((block) => block.startStitch > stop.at) ?? null)
+    : null;
+  return { kind: "color", nextBlock };
+}

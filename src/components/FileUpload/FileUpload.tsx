@@ -25,6 +25,7 @@ import { PatternInfoSkeleton } from "../SkeletonLoader";
 import { PatternInfo } from "../PatternInfo";
 import { DocumentTextIcon, PhotoIcon } from "@heroicons/react/24/solid";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { createFileService } from "../../platform";
 import type { IFileService } from "../../platform/interfaces/IFileService";
 import { Card, CardContent } from "@/components/ui/card";
@@ -91,12 +92,16 @@ export function FileUpload() {
     pyodideProgress,
     pyodideLoadingStep,
     initializePyodide,
+    stopAfterTrim,
+    setStopAfterTrim,
   } = useUIStore(
     useShallow((state) => ({
       pyodideReady: state.pyodideReady,
       pyodideProgress: state.pyodideProgress,
       pyodideLoadingStep: state.pyodideLoadingStep,
       initializePyodide: state.initializePyodide,
+      stopAfterTrim: state.stopAfterTrim,
+      setStopAfterTrim: state.setStopAfterTrim,
     })),
   );
 
@@ -135,6 +140,7 @@ export function FileUpload() {
   const { handleUpload: handlePatternUpload } = usePatternRotationUpload({
     uploadPattern,
     setUploadedPattern,
+    stopAfterTrim,
   });
 
   // Wrapper to call upload with current pattern data
@@ -240,6 +246,24 @@ export function FileUpload() {
             patternUploaded={patternUploaded}
           />
         </div>
+
+        {pesData && !patternUploaded && (
+          <label className="flex items-start gap-2 mb-3 text-xs text-gray-700 dark:text-gray-300 cursor-pointer">
+            <Switch
+              checked={stopAfterTrim}
+              onCheckedChange={setStopAfterTrim}
+              disabled={isUploading}
+              className="mt-0.5"
+            />
+            <span>
+              Stop after each thread cut
+              <span className="block text-gray-500 dark:text-gray-400">
+                The machine pauses so you can hold the thread when it starts
+                again. Press its start button to continue.
+              </span>
+            </span>
+          </label>
+        )}
 
         <Button
           variant="outline"

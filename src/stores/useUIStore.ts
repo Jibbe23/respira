@@ -10,12 +10,26 @@ interface UIState {
 
   // UI state
   showErrorPopover: boolean;
+  // Pause the machine after every thread cut (see encoder option)
+  stopAfterTrim: boolean;
 
   // Actions
   initializePyodide: () => Promise<void>;
   setPyodideProgress: (progress: number, step: string) => void;
   toggleErrorPopover: () => void;
   setErrorPopover: (show: boolean) => void;
+  setStopAfterTrim: (stop: boolean) => void;
+}
+
+const STOP_AFTER_TRIM_KEY = "respira.stopAfterTrim";
+
+// On by default; storage can be unavailable (private window)
+function loadStopAfterTrim(): boolean {
+  try {
+    return localStorage.getItem(STOP_AFTER_TRIM_KEY) !== "false";
+  } catch {
+    return true;
+  }
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -25,6 +39,7 @@ export const useUIStore = create<UIState>((set) => ({
   pyodideProgress: 0,
   pyodideLoadingStep: "",
   showErrorPopover: false,
+  stopAfterTrim: loadStopAfterTrim(),
 
   // Initialize Pyodide with progress tracking
   initializePyodide: async () => {
@@ -74,6 +89,15 @@ export const useUIStore = create<UIState>((set) => ({
   // Set error popover visibility
   setErrorPopover: (show: boolean) => {
     set({ showErrorPopover: show });
+  },
+
+  setStopAfterTrim: (stop: boolean) => {
+    try {
+      localStorage.setItem(STOP_AFTER_TRIM_KEY, String(stop));
+    } catch {
+      // Keep the choice for this session only
+    }
+    set({ stopAfterTrim: stop });
   },
 }));
 
