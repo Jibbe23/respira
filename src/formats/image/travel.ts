@@ -124,15 +124,20 @@ function hopNode(graph: TravelGraph, p: Point): number {
     .sort((a, b) => a.d - b.d)
     .slice(0, HOP_CANDIDATES);
   const rings = graph.rings;
+  // From a point inside, a hop that crosses no edge stays inside: only hops
+  // from outside need the middle check (computed once, when needed)
+  let outside: boolean | undefined;
   for (const { i } of order) {
     const node = graph.nodes[i];
     const blocked = rings?.some((ring) =>
       ring.some((a, k) => crosses(p, node, a, ring[(k + 1) % ring.length])),
     );
     if (blocked) continue;
+    if (!rings) return i;
+    outside ??= !insideRings(p, rings, graph.rule);
+    if (!outside) return i;
     const middle = { x: (p.x + node.x) / 2, y: (p.y + node.y) / 2 };
     if (
-      rings &&
       !insideRings(middle, rings, graph.rule) &&
       distanceToRings(middle, rings) > NEAR_REGION
     ) {
