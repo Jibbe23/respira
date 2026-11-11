@@ -64,10 +64,14 @@ export type MachineStop =
   | { kind: "trim" }
   | { kind: "color"; nextBlock: ColorBlock | null };
 
+/** Stitches the machine may report short of the stop it waits at */
+const STOP_TOLERANCE = 2;
+
 /**
  * What the machine waits for when it reports a color change: a real thread
  * change, or a pause after a cut (added by `stopAfterTrim`). The machine
- * reports both the same way, so take the stop nearest to its stitch.
+ * reports both the same way: take the last stop it has reached. Stops are
+ * at least the lock stitches apart, far more than the tolerance.
  */
 export function classifyMachineStop(
   colorBlocks: ColorBlock[],
@@ -80,12 +84,11 @@ export function classifyMachineStop(
       .slice(0, -1)
       .map((block) => ({ at: block.endStitch, kind: "color" as const })),
     ...trimStops.map((at) => ({ at, kind: "trim" as const })),
-  ];
-  const distance = (at: number) => Math.abs(at - currentStitch);
-  const stop = stops.reduce<(typeof stops)[number] | null>(
-    (best, s) => (!best || distance(s.at) < distance(best.at) ? s : best),
-    null,
+  ].sort((a, b) => a.at - b.at);
+  const reached = stops.filter(
+    (stop) => stop.at <= currentStitch + STOP_TOLERANCE,
   );
+  const stop = reached[reached.length - 1] ?? stops[0];
 
   if (stop?.kind === "trim") return { kind: "trim" };
   const nextBlock = stop

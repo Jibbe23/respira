@@ -723,8 +723,50 @@ describe("encodeStitchesToPen with stopAfterTrim", () => {
     const decoded = decodeAllPenStitches(result.penBytes);
 
     expect(result.trimStops).toHaveLength(1);
-    expect(decoded[result.trimStops[0]].isColorEnd).toBe(true);
+    const stop = result.trimStops[0];
+    expect(decoded[stop].isColorEnd).toBe(true);
+    expect(decoded[stop].isCut).toBe(true);
     expect(decoded.filter((s) => s.isColorEnd)).toHaveLength(1);
+    // Already cut: straight on to the jump, no lock stitches or second cut
+    expect(decoded[stop + 1].isFeed).toBe(true);
+    expect([decoded[stop + 1].x, decoded[stop + 1].y]).toEqual([210, 0]);
+    expect(decoded.filter((s) => s.isCut)).toHaveLength(1);
+  });
+
+  it("pauses at every long jump, also right after one", () => {
+    const stitches = [
+      [0, 0, STITCH, 0],
+      [10, 0, STITCH, 0],
+      [210, 0, MOVE, 0],
+      [410, 0, MOVE, 0],
+      [420, 0, STITCH, 0],
+      [430, 0, STITCH | END, 0],
+    ];
+    const result = encodeStitchesToPen(stitches, { stopAfterTrim: true });
+    const decoded = decodeAllPenStitches(result.penBytes);
+
+    // The lock stitches at 210 are sewn, so the second jump cuts again
+    expect(result.trimStops).toHaveLength(2);
+    for (const stop of result.trimStops) {
+      expect(decoded[stop].isColorEnd && decoded[stop].isCut).toBe(true);
+    }
+  });
+
+  it("does not pause right before a color change", () => {
+    const stitches = [
+      [0, 0, STITCH, 0],
+      [10, 0, STITCH, 0],
+      [210, 0, MOVE, 0],
+      [220, 0, STITCH, 0],
+      [230, 0, STITCH, 1],
+      [240, 0, STITCH | END, 1],
+    ];
+    const result = encodeStitchesToPen(stitches, { stopAfterTrim: true });
+    const decoded = decodeAllPenStitches(result.penBytes);
+
+    expect(result.trimStops).toEqual([]);
+    // The jump cuts as without the option
+    expect(decoded.some((s) => s.isFeed && s.isCut)).toBe(true);
   });
 
   it("keeps real color changes and their color blocks", () => {
@@ -733,8 +775,9 @@ describe("encodeStitchesToPen with stopAfterTrim", () => {
       [10, 0, STITCH, 0],
       [210, 0, MOVE, 0],
       [220, 0, STITCH, 0],
-      [220, 0, STITCH, 1],
-      [230, 0, STITCH | END, 1],
+      [230, 0, STITCH, 0],
+      [240, 0, STITCH, 1],
+      [250, 0, STITCH | END, 1],
     ];
     const result = encodeStitchesToPen(stitches, { stopAfterTrim: true });
     const decoded = decodePenData(

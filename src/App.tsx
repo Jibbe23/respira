@@ -149,12 +149,11 @@ function App() {
           originalPesData.bounds,
         );
 
-        // Same stops as the upload, assuming the setting has not changed since
-        const penResult = encodeStitchesToPen(rotatedStitches, {
-          stopAfterTrim: useUIStore.getState().stopAfterTrim,
-        });
+        // Uploads since the stops after cuts always cache their data, so
+        // this is an older upload without such stops
+        const penResult = encodeStitchesToPen(rotatedStitches);
         const penData = new Uint8Array(penResult.penBytes);
-        const decoded = decodePenData(penData, penResult.trimStops);
+        const decoded = decodePenData(penData);
         const rotatedBounds = calculateBoundsFromDecodedStitches(decoded);
 
         // Calculate center shift using the same helper as store selectors

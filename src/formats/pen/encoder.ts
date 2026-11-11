@@ -192,6 +192,19 @@ function encodeFlagged(
   ];
 }
 
+/** Does the color change between stitch `from` and `count` stitches later? */
+function colorChangesWithin(
+  stitches: number[][],
+  from: number,
+  count: number,
+): boolean {
+  const last = Math.min(from + count, stitches.length - 1);
+  for (let k = from; k < last; k++) {
+    if (stitches[k + 1][3] !== stitches[k][3]) return true;
+  }
+  return false;
+}
+
 /**
  * Encode stitches array to PEN format bytes
  *
@@ -211,8 +224,8 @@ export function encodeStitchesToPen(
 
   const penStitches: number[] = [];
   const trimStops: number[] = [];
-  // A stop was added and no stitch has been sewn since (no second stop then)
-  let stoppedSinceStitch = false;
+  // Paused at a cut from the file and nothing sewn since
+  let pausedAfterCut = false;
 
   // Track position for calculating jump distances
   let prevX = 0;
@@ -241,36 +254,39 @@ export function encodeStitchesToPen(
       const jumpDist = Math.sqrt((absX - prevX) ** 2 + (absY - prevY) ** 2);
 
       if (!isFirstStitch && jumpDist > FEED_LENGTH) {
-        // Long jump - add finishing lock stitches at previous position
-        // Loop B: End/Cut Vector - Look BACKWARD at previous stitches
-        // This hides the knot inside the embroidery we just finished
-        const finishDir = calculateLockDirection(stitches, i - 1, false);
-        penStitches.push(
-          ...generateLockStitches(prevX, prevY, finishDir.dirX, finishDir.dirY),
-        );
-
-        if (stopAfterTrim && !stoppedSinceStitch) {
-          // Cut and pause at the current position (like a color change),
-          // then jump without cutting again
+        // With stopAfterTrim, the thread may already be cut at a stop for a
+        // cut from the file: then neither lock nor cut again
+        if (!pausedAfterCut) {
+          // Long jump - add finishing lock stitches at previous position
+          // Loop B: End/Cut Vector - Look BACKWARD at previous stitches
+          // This hides the knot inside the embroidery we just finished
+          const finishDir = calculateLockDirection(stitches, i - 1, false);
+          penStitches.push(
+            ...generateLockStitches(
+              prevX,
+              prevY,
+              finishDir.dirX,
+              finishDir.dirY,
+            ),
+          );
+        }
+        // No pause right before a color change (the machine stops there)
+        const stop =
+          stopAfterTrim &&
+          !pausedAfterCut &&
+          !colorChangesWithin(stitches, i, 2);
+        if (stop) {
+          // Cut and pause at the current position like a color change
           trimStops.push(penStitches.length / 4);
           penStitches.push(
             ...encodeFlagged(prevX, prevY, PEN_COLOR_END, PEN_CUT_DATA),
           );
-          stoppedSinceStitch = true;
         }
 
-        // Encode jump with FEED flag and CUT flag (unless already cut at a stop)
-        const xEncoded = (absX << 3) & 0xffff;
-        let yEncoded = (absY << 3) & 0xffff;
-        yEncoded |= PEN_FEED_DATA; // Jump flag
-        if (!stoppedSinceStitch) yEncoded |= PEN_CUT_DATA; // Cut flag for long jumps
-
-        penStitches.push(
-          xEncoded & 0xff,
-          (xEncoded >> 8) & 0xff,
-          yEncoded & 0xff,
-          (yEncoded >> 8) & 0xff,
-        );
+        // Jump with FEED flag, and CUT flag unless already cut at a stop
+        const cut = !stop && !pausedAfterCut ? PEN_CUT_DATA : 0;
+        penStitches.push(...encodeFlagged(absX, absY, 0, PEN_FEED_DATA | cut));
+        pausedAfterCut = false; // lock stitches follow
 
         // Add starting lock stitches at new position
         // Loop A: Jump/Entry Vector - Look FORWARD at upcoming stitches
@@ -319,15 +335,15 @@ export function encodeStitchesToPen(
     } else if (
       stopAfterTrim &&
       cmd & TRIM &&
-      !isColorChange &&
-      !stoppedSinceStitch
+      !colorChangesWithin(stitches, i, 2)
     ) {
       // Cut from the file: pause here as well
       xEncoded = (xEncoded & 0xfff8) | PEN_COLOR_END;
       trimStops.push(penStitches.length / 4);
-      stoppedSinceStitch = true;
+      pausedAfterCut = true;
+    } else if ((cmd & MOVE) === 0) {
+      pausedAfterCut = false;
     }
-    if ((cmd & MOVE) === 0 && !(cmd & TRIM)) stoppedSinceStitch = false;
 
     // Add the encoded stitch
     penStitches.push(
