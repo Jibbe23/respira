@@ -18,7 +18,8 @@ import { useUIStore } from "../../stores/useUIStore";
 
 interface SavePesButtonProps {
   pesData: PesPatternData | null;
-  // Rotation set on the canvas: saved like it is uploaded
+  // Rotation set on the canvas is saved too (the position in the hoop is
+  // not: PES patterns are centered)
   patternRotation: number;
   fileName: string;
   fileService: IFileService;
