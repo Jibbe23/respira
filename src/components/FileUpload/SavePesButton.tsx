@@ -13,9 +13,13 @@ import type { PesPatternData } from "../../formats/import/pesImporter";
 import { patternConverterClient } from "../../formats/import/client";
 import type { IFileService } from "../../platform/interfaces/IFileService";
 import { pesFileName } from "../../utils/pesFileName";
+import { transformStitchesRotation } from "../../utils/rotationUtils";
+import { useUIStore } from "../../stores/useUIStore";
 
 interface SavePesButtonProps {
   pesData: PesPatternData | null;
+  // Rotation set on the canvas: saved like it is uploaded
+  patternRotation: number;
   fileName: string;
   fileService: IFileService;
   pyodideReady: boolean;
@@ -24,24 +28,47 @@ interface SavePesButtonProps {
 
 export function SavePesButton({
   pesData,
+  patternRotation,
   fileName,
   fileService,
   pyodideReady,
   initializePyodide,
 }: SavePesButtonProps) {
   const [isSaving, setIsSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // An error belongs to the pattern it occurred for
+  const [error, setError] = useState<{
+    pattern: PesPatternData;
+    message: string;
+  } | null>(null);
 
   const handleSave = async () => {
     if (!pesData) return;
     setIsSaving(true);
     setError(null);
     try {
-      if (!pyodideReady) await initializePyodide();
-      const data = await patternConverterClient.writePes(pesData);
+      if (!pyodideReady) {
+        await initializePyodide();
+        // The store keeps the reason when loading fails
+        const loadError = useUIStore.getState().pyodideError;
+        if (loadError) throw new Error(loadError);
+      }
+      const stitches = patternRotation
+        ? transformStitchesRotation(
+            pesData.stitches,
+            patternRotation,
+            pesData.bounds,
+          )
+        : pesData.stitches;
+      const data = await patternConverterClient.writePes({
+        stitches,
+        threads: pesData.threads,
+      });
       await fileService.saveFileDialog(data, pesFileName(fileName));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Saving failed");
+      setError({
+        pattern: pesData,
+        message: err instanceof Error ? err.message : "Saving failed",
+      });
     } finally {
       setIsSaving(false);
     }
@@ -63,9 +90,9 @@ export function SavePesButton({
         )}
         Save as PES
       </Button>
-      {error && (
+      {error && error.pattern === pesData && (
         <p className="text-xs text-danger-600 dark:text-danger-400 mb-3">
-          Could not save the PES file: {error}
+          Could not save the PES file: {error.message}
         </p>
       )}
     </>

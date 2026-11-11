@@ -3,14 +3,20 @@ import { BrowserFileService } from "./browser/BrowserFileService";
 import { saveFilters } from "./electron/ElectronFileService";
 
 describe("BrowserFileService.saveFileDialog", () => {
-  afterEach(() => vi.restoreAllMocks());
+  const { createObjectURL, revokeObjectURL } = URL;
+  afterEach(() => {
+    vi.restoreAllMocks();
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL;
+  });
 
   it("downloads the data under the given name", async () => {
     const createObjectURL = vi.fn((blob: Blob) => {
       void blob;
       return "blob:pes";
     });
-    vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL: vi.fn() });
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = vi.fn();
     const click = vi
       .spyOn(HTMLAnchorElement.prototype, "click")
       .mockImplementation(function (this: HTMLAnchorElement) {
@@ -26,7 +32,6 @@ describe("BrowserFileService.saveFileDialog", () => {
     expect(click).toHaveBeenCalledOnce();
     const blob = createObjectURL.mock.calls[0][0];
     expect(blob.size).toBe(3);
-    vi.unstubAllGlobals();
   });
 });
 

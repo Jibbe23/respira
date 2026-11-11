@@ -1,4 +1,5 @@
 import { loadPyodide, type PyodideInterface } from "pyodide";
+import type { PyCallable, PyProxy } from "pyodide/ffi";
 import { STITCH, MOVE, TRIM, END } from "./constants";
 import { encodeStitchesToPen } from "../pen/encoder";
 import writePesSource from "../export/writePes.py?raw";
@@ -417,15 +418,19 @@ function writePes(stitches: number[][], threads: PesThread[]) {
     const namespace = pyodide.globals.get("dict")();
     const pyStitches = pyodide.toPy(stitches);
     const pyThreads = pyodide.toPy(threads);
+    let write: PyCallable | undefined;
+    let result: PyProxy | undefined;
     try {
       pyodide.runPython(writePesSource, { globals: namespace });
-      const result = namespace.get("write_pes")(pyStitches, pyThreads);
-      const data: Uint8Array = result.toJs();
-      result.destroy();
+      write = namespace.get("write_pes") as PyCallable;
+      result = write(pyStitches, pyThreads) as PyProxy;
+      const data = result.toJs() as Uint8Array;
       self.postMessage({ type: "WRITE_PES_COMPLETE", data } as WorkerResponse, {
         transfer: [data.buffer],
       });
     } finally {
+      result?.destroy();
+      write?.destroy();
       pyStitches.destroy();
       pyThreads.destroy();
       namespace.destroy();

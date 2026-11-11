@@ -254,6 +254,7 @@ export function FileUpload() {
         </Button>
         <SavePesButton
           pesData={pesData}
+          patternRotation={patternRotation}
           fileName={displayFileName}
           fileService={fileService}
           pyodideReady={pyodideReady}

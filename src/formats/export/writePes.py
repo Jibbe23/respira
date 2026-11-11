@@ -10,26 +10,31 @@ JS_MOVE = 0x10
 JS_TRIM = 0x20
 
 
-def build_pattern(stitches, threads):
-    pattern = pystitch.EmbPattern()
-    for t in threads:
-        thread = pystitch.EmbThread()
-        thread.set(t["hex"])
-        if t.get("catalogNumber"):
-            thread.catalog_number = t["catalogNumber"]
-        if t.get("description"):
-            thread.description = t["description"]
-        if t.get("brand"):
-            thread.brand = t["brand"]
-        if t.get("chart"):
-            thread.chart = t["chart"]
-        pattern.add_thread(thread)
+def make_thread(t):
+    thread = pystitch.EmbThread()
+    thread.set(t["hex"])
+    if t.get("catalogNumber"):
+        thread.catalog_number = t["catalogNumber"]
+    if t.get("description"):
+        thread.description = t["description"]
+    if t.get("brand"):
+        thread.brand = t["brand"]
+    if t.get("chart"):
+        thread.chart = t["chart"]
+    return thread
 
+
+def build_pattern(stitches, threads):
+    # One thread per color block, taken from the block's color index (indices
+    # may skip a thread or come back to one)
+    pattern = pystitch.EmbPattern()
     color = None
     for x, y, cmd, color_index in stitches:
-        if color is not None and color_index != color:
-            pattern.color_change()
-        color = color_index
+        if color_index != color:
+            if color is not None:
+                pattern.color_change()
+            pattern.add_thread(make_thread(threads[int(color_index)]))
+            color = color_index
         if cmd & JS_TRIM:
             pattern.add_command(TRIM)
         pattern.add_stitch_absolute(JUMP if cmd & JS_MOVE else STITCH, x, y)

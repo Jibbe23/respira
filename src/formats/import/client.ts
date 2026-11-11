@@ -314,17 +314,27 @@ class PatternConverterClient {
       );
     }
     return new Promise<Uint8Array>((resolve, reject) => {
+      const done = () => {
+        worker.removeEventListener("message", handleMessage);
+        worker.removeEventListener("error", handleError);
+      };
       const handleMessage = (event: MessageEvent<WorkerResponse>) => {
         const message = event.data;
         if (message.type === "WRITE_PES_COMPLETE") {
-          worker.removeEventListener("message", handleMessage);
+          done();
           resolve(message.data);
         } else if (message.type === "WRITE_PES_ERROR") {
-          worker.removeEventListener("message", handleMessage);
+          done();
           reject(new Error(message.error));
         }
       };
+      // The worker crashed (e.g. out of memory): no reply will come
+      const handleError = (event: ErrorEvent) => {
+        done();
+        reject(new Error(event.message || "Worker error"));
+      };
       worker.addEventListener("message", handleMessage);
+      worker.addEventListener("error", handleError);
       const writeMessage: WorkerMessage = {
         type: "WRITE_PES",
         stitches: pattern.stitches,
