@@ -7,7 +7,7 @@ export interface IFileService {
   openFileDialog(options: { accept: string }): Promise<File | null>;
 
   /**
-   * Save file with native dialog (Electron only, no-op in browser)
+   * Save file: native dialog in Electron, download in the browser
    * @param data File data as Uint8Array
    * @param defaultName Default filename
    */

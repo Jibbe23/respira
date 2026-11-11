@@ -35,6 +35,7 @@ import { UploadButton } from "./UploadButton";
 import { UploadProgress } from "./UploadProgress";
 import { BoundsValidator } from "./BoundsValidator";
 import { ImageToEmbroideryDialog } from "./ImageToEmbroideryDialog";
+import { SavePesButton } from "./SavePesButton";
 
 export function FileUpload() {
   // Machine store
@@ -251,6 +252,14 @@ export function FileUpload() {
           <PhotoIcon />
           Image to embroidery
         </Button>
+        <SavePesButton
+          pesData={pesData}
+          patternRotation={patternRotation}
+          fileName={displayFileName}
+          fileService={fileService}
+          pyodideReady={pyodideReady}
+          initializePyodide={initializePyodide}
+        />
         {imageDialogOpen && (
           <ImageToEmbroideryDialog
             open={imageDialogOpen}

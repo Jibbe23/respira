@@ -1,11 +1,23 @@
 import { loadPyodide, type PyodideInterface } from "pyodide";
+import type { PyCallable, PyProxy } from "pyodide/ffi";
 import { STITCH, MOVE, TRIM, END } from "./constants";
 import { encodeStitchesToPen } from "../pen/encoder";
+import writePesSource from "../export/writePes.py?raw";
 
 // Message types from main thread
 export type WorkerMessage =
   | { type: "INITIALIZE"; pyodideIndexURL?: string; pystitchWheelURL?: string }
-  | { type: "CONVERT_PES"; fileData: ArrayBuffer; fileName: string };
+  | { type: "CONVERT_PES"; fileData: ArrayBuffer; fileName: string }
+  | { type: "WRITE_PES"; stitches: number[][]; threads: PesThread[] };
+
+/** Thread data written to a PES file */
+export interface PesThread {
+  hex: string;
+  brand: string | null;
+  catalogNumber: string | null;
+  description: string | null;
+  chart: string | null;
+}
 
 // Response types to main thread
 export type WorkerResponse =
@@ -44,7 +56,9 @@ export type WorkerResponse =
         };
       };
     }
-  | { type: "CONVERT_ERROR"; error: string };
+  | { type: "CONVERT_ERROR"; error: string }
+  | { type: "WRITE_PES_COMPLETE"; data: Uint8Array }
+  | { type: "WRITE_PES_ERROR"; error: string };
 
 console.log("[PatternConverterWorker] Worker script loaded");
 
@@ -393,6 +407,43 @@ for i, stitch in enumerate(pattern.stitches):
   }
 }
 
+/**
+ * Write stitches and threads as a PES file with pystitch (writePes.py)
+ */
+function writePes(stitches: number[][], threads: PesThread[]) {
+  try {
+    if (!pyodide) {
+      throw new Error("Pyodide not initialized");
+    }
+    const namespace = pyodide.globals.get("dict")();
+    const pyStitches = pyodide.toPy(stitches);
+    const pyThreads = pyodide.toPy(threads);
+    let write: PyCallable | undefined;
+    let result: PyProxy | undefined;
+    try {
+      pyodide.runPython(writePesSource, { globals: namespace });
+      write = namespace.get("write_pes") as PyCallable;
+      result = write(pyStitches, pyThreads) as PyProxy;
+      const data = result.toJs() as Uint8Array;
+      self.postMessage({ type: "WRITE_PES_COMPLETE", data } as WorkerResponse, {
+        transfer: [data.buffer],
+      });
+    } finally {
+      result?.destroy();
+      write?.destroy();
+      pyStitches.destroy();
+      pyThreads.destroy();
+      namespace.destroy();
+    }
+  } catch (err) {
+    console.error("[PyodideWorker] PES writing error:", err);
+    self.postMessage({
+      type: "WRITE_PES_ERROR",
+      error: err instanceof Error ? err.message : "Unknown error",
+    } as WorkerResponse);
+  }
+}
+
 // Handle messages from main thread
 self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
   const message = event.data;
@@ -411,6 +462,10 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
       case "CONVERT_PES":
         console.log("[PatternConverterWorker] Starting PES conversion...");
         await convertPesToPen(message.fileData);
+        break;
+
+      case "WRITE_PES":
+        writePes(message.stitches, message.threads);
         break;
 
       default:
