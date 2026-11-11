@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { satinStitches, type SatinOptions } from "./satin";
+import { planSatin, sewSatin, type SatinOptions } from "./satin";
 import type { Point, Ring } from "./fillStitches";
 
 const OPTIONS: SatinOptions = {
@@ -8,6 +8,16 @@ const OPTIONS: SatinOptions = {
   underlayStitch: 20,
   maxWidth: 50,
 };
+
+/** Plan and sew as the conversion does; null when not satin */
+function satinStitches(
+  rings: Ring[],
+  start: Point | null,
+  options: SatinOptions,
+): Point[][] | null {
+  const plan = planSatin(rings, options);
+  return plan ? sewSatin(plan, start, options) : null;
+}
 
 const rect = (x: number, y: number, w: number, h: number): Ring => [
   { x, y },

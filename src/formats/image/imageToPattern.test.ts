@@ -7,12 +7,14 @@ import {
 import { crossStitchRuns } from "./crossStitch";
 import {
   tatamiFill,
+  offsetRings,
   runAroundRing,
   regionArea,
   repeatClosedRun,
 } from "./fillStitches";
 import { createTravelGraph, connectBlocks } from "./travel";
 import { MOVE } from "../import/constants";
+import { quantizePalette } from "./traceImage";
 
 type Pixel = [number, number, number, number];
 
@@ -399,7 +401,77 @@ describe("imageToPattern", () => {
     const across = stitches.filter(
       (s, i) => i > 0 && Math.abs(s[1] - stitches[i - 1][1]) > 12,
     );
-    expect(across.length).toBeGreaterThan(stitches.length * 0.6);
+    expect(across.length).toBeGreaterThan(stitches.length * 0.5);
+    // Then an outline: running stitches along both edges (y = ±7.5)
+    for (const edge of [-7.5, 7.5]) {
+      const along = stitches.filter(
+        (s, i) =>
+          i > 0 &&
+          Math.abs(s[1] - edge) < 1 &&
+          Math.abs(stitches[i - 1][1] - edge) < 1 &&
+          Math.abs(s[0] - stitches[i - 1][0]) > 15,
+      );
+      expect(along.length).toBeGreaterThan(10);
+    }
+  });
+
+  it("sews the lines of a thread with large areas too after all areas", () => {
+    // Black: a large square and thin lines (about a third of its area);
+    // red: a square
+    const BLACK: Pixel = [0, 0, 0, 255];
+    const image = makeImage(300, 200, (x, y) => {
+      if (x >= 10 && x < 80 && y >= 10 && y < 80) return BLACK;
+      if (x >= 220 && x < 260 && y >= 80 && y < 120) return RED;
+      if (x >= 100 && x < 196 && y >= 10 && y < 120 && x % 12 < 4) {
+        return BLACK;
+      }
+      return WHITE;
+    });
+    const { threads } = imageToPattern(image, {
+      colors: 2,
+      widthMm: 90,
+      removeBackground: true,
+      ...TATAMI,
+    })!;
+    expect(threads.map((t) => t.description)).toEqual([
+      "BLACK",
+      expect.stringMatching(/RED|CARMINE/i),
+      "BLACK",
+    ]);
+  });
+
+  it("fills areas a little past their edge against gaps", () => {
+    const { stitches } = imageToPattern(logo, {
+      colors: 2,
+      widthMm: 60,
+      removeBackground: true,
+      ...TATAMI,
+    })!;
+    const xs = stitches.map((s) => s[0]);
+    // The outline keeps 0.5 mm room on each side (left edge at -29.5 mm),
+    // the fill reaches 0.3 mm past it, and all stays within the 60 mm
+    expect(Math.min(...xs)).toBeLessThanOrEqual(-297.5);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeLessThanOrEqual(600);
+  });
+
+  it("sews lines last, on top of the areas", () => {
+    // Many thin black lines (more area than the red square) and a square
+    const BLACK: Pixel = [0, 0, 0, 255];
+    const image = makeImage(300, 200, (x, y) => {
+      if (x >= 200 && x < 240 && y >= 80 && y < 120) return RED;
+      if (x < 180 && y >= 10 && y < 190 && x % 12 < 4) return BLACK;
+      return WHITE;
+    });
+    const { threads } = imageToPattern(image, {
+      colors: 2,
+      widthMm: 90,
+      removeBackground: true,
+      ...TATAMI,
+    })!;
+    expect(threads.map((t) => t.description)).toEqual([
+      expect.stringMatching(/RED|CARMINE/i),
+      "BLACK",
+    ]);
   });
 
   it("returns null when only the background is left", () => {
@@ -412,6 +484,108 @@ describe("imageToPattern", () => {
         ...TATAMI,
       }),
     ).toBeNull();
+  });
+});
+
+describe("offsetRings", () => {
+  const sq = square(100)[0];
+  const hole = [
+    { x: 40, y: 40 },
+    { x: 40, y: 60 },
+    { x: 60, y: 60 },
+    { x: 60, y: 40 },
+  ];
+
+  it("grows the area on all sides and shrinks holes", () => {
+    for (const outer of [sq, [...sq].reverse()]) {
+      const [grown, shrunk] = offsetRings([outer, hole], 3);
+      const xs = grown.map((p) => p.x);
+      const ys = grown.map((p) => p.y);
+      expect([Math.min(...xs), Math.max(...xs)]).toEqual([-3, 103]);
+      expect([Math.min(...ys), Math.max(...ys)]).toEqual([-3, 103]);
+      expect(regionArea([shrunk])).toBeCloseTo(14 * 14);
+    }
+  });
+
+  it("covers edges parallel to the fill rows too", () => {
+    // Diamond: two of its edges run along the 45 degree rows
+    const diamond = [
+      { x: 50, y: 0 },
+      { x: 100, y: 50 },
+      { x: 50, y: 100 },
+      { x: 0, y: 50 },
+    ];
+    const points = tatamiFill(offsetRings([diamond], 3), {
+      angle: 45,
+      spacing: 4,
+      stitchLength: 40,
+    }).flat();
+    // Reaches past every edge (without the offset two edges stay short)
+    for (const [sx, sy] of [
+      [1, 1],
+      [1, -1],
+      [-1, 1],
+      [-1, -1],
+    ]) {
+      expect(points.some((p) => sx * (p.x - 50) + sy * (p.y - 50) > 50.2)).toBe(
+        true,
+      );
+    }
+  });
+
+  it("fills across a notch where the grown ring overlaps itself", () => {
+    // U shape with a 0.4 mm slit between its arms: grown by 0.3 mm the arms
+    // overlap; the nonzero rule keeps the overlap filled
+    const u = [
+      { x: 0, y: 0 },
+      { x: 48, y: 0 },
+      { x: 48, y: 80 },
+      { x: 52, y: 80 },
+      { x: 52, y: 0 },
+      { x: 100, y: 0 },
+      { x: 100, y: 100 },
+      { x: 0, y: 100 },
+    ];
+    const blocks = tatamiFill(offsetRings([u], 3), {
+      angle: 45,
+      spacing: 4,
+      stitchLength: 40,
+      rule: "nonzero",
+    });
+    // Every point of the arms near the slit lies on or between fill rows:
+    // its nearest stitch is closer than the row spacing
+    const stitches = blocks.flatMap((b) => b.slice(1).map((p, i) => [b[i], p]));
+    for (const p of [
+      { x: 44, y: 40 },
+      { x: 56, y: 40 },
+      { x: 50, y: 90 },
+    ]) {
+      const nearest = Math.min(
+        ...stitches.map(([a, b]) => {
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const t = Math.max(
+            0,
+            Math.min(
+              1,
+              ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1),
+            ),
+          );
+          return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+        }),
+      );
+      expect(nearest).toBeLessThan(4);
+    }
+  });
+
+  it("drops holes too small to keep", () => {
+    const tiny = [
+      { x: 50, y: 50 },
+      { x: 50, y: 54 },
+      { x: 54, y: 54 },
+      { x: 54, y: 50 },
+    ];
+    expect(offsetRings([sq, tiny], 3)).toHaveLength(1);
   });
 });
 
@@ -531,5 +705,29 @@ describe("cross stitch", () => {
       );
       expect(d).toBeLessThanOrEqual(30 * Math.SQRT2 + 1.5);
     }
+  });
+});
+
+describe("quantizePalette", () => {
+  it("ignores the mixed colors along edges of a scaled image", () => {
+    // Black lines with gray (anti-aliased) edges, and two close light
+    // colors that must both get a palette entry
+    const CREAM: Pixel = [241, 232, 216, 255];
+    const SKIN: Pixel = [242, 218, 203, 255];
+    const image = makeImage(200, 200, (x, y) => {
+      if (y >= 120) return x < 100 ? CREAM : SKIN;
+      const m = x % 10;
+      if (m === 4) return [0, 0, 0, 255];
+      if (m === 3 || m === 5) return [128, 128, 128, 255];
+      return WHITE;
+    });
+    const palette = quantizePalette(image, 4).map((c) => [c.r, c.g, c.b]);
+    const near = (target: number[]) =>
+      palette.some((c) => c.every((v, k) => Math.abs(v - target[k]) < 8));
+    expect(near([241, 232, 216])).toBe(true);
+    expect(near([242, 218, 203])).toBe(true);
+    // The 1 px lines keep their color, their gray edges get none
+    expect(near([0, 0, 0])).toBe(true);
+    expect(near([128, 128, 128])).toBe(false);
   });
 });

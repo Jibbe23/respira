@@ -2,8 +2,13 @@
  * Read an image file (PNG, JPG, SVG, ...) into pixels for tracing
  */
 
-/** Longest side the image is reduced to before tracing (speed vs. detail) */
-const TRACE_SIZE = 400;
+/**
+ * Longest side the image is reduced to before tracing (speed vs. detail):
+ * a bit finer than the 0.1 mm stitch resolution over a 100 mm hoop
+ * (1000 px), so thin lines and dots survive scaling (at 400 px contour lines
+ * blurred away)
+ */
+const TRACE_SIZE = 1200;
 /** Size used for SVGs without width/height */
 const DEFAULT_SVG_SIZE = 400;
 

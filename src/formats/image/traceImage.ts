@@ -46,15 +46,57 @@ interface TracePath {
 const BACKGROUND_BORDER_SHARE = 0.6;
 /** k-means rounds for the palette */
 const PALETTE_ITERATIONS = 10;
+/** Neighbours closer than this (RGB distance) are not an edge to mix across */
+const MIN_EDGE_CONTRAST = 40;
+
+/**
+ * Pixels whose color is a mix of their two opposite neighbours (left and
+ * right, or above and below): anti-aliased edges, and the mixed colors that
+ * scaling an image adds along every edge
+ */
+function mixedPixels({ data, width, height }: ImageData): Uint8Array {
+  const mixed = new Uint8Array(width * height);
+  const isMix = (i: number, a: number, b: number) => {
+    if (data[a + 3] < 128 || data[b + 3] < 128) return false;
+    const dr = data[b] - data[a];
+    const dg = data[b + 1] - data[a + 1];
+    const db = data[b + 2] - data[a + 2];
+    const length2 = dr * dr + dg * dg + db * db;
+    if (length2 < MIN_EDGE_CONTRAST ** 2) return false;
+    const pr = data[i] - data[a];
+    const pg = data[i + 1] - data[a + 1];
+    const pb = data[i + 2] - data[a + 2];
+    const t = (pr * dr + pg * dg + pb * db) / length2;
+    if (t < 0.1 || t > 0.9) return false;
+    const off = Math.hypot(pr - t * dr, pg - t * dg, pb - t * db);
+    return off < Math.max(12, 0.25 * Math.sqrt(length2));
+  };
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const i = (y * width + x) * 4;
+      if (data[i + 3] < 128) continue;
+      if (isMix(i, i - 4, i + 4) || isMix(i, i - width * 4, i + width * 4)) {
+        mixed[y * width + x] = 1;
+      }
+    }
+  }
+  return mixed;
+}
 
 /**
  * Palette of `colors` colors for the opaque pixels: k-means on a 5-bit color
  * histogram, seeded with frequent colors that are far apart from each other
- * (so anti-aliased edge pixels do not get a color of their own). A
- * transparent entry is added when the image has transparent pixels.
+ * (so anti-aliased edge pixels do not get a color of their own). Pixels that
+ * mix their neighbours' colors are not counted: scaling an image mixes colors
+ * along every edge, and the gray along black lines on white would otherwise
+ * take the place of a real color. Thin lines still count with their own
+ * color, unless a 1 px line has a color between its neighbours' (it cannot
+ * be told apart from an edge). A transparent entry is added when the image
+ * has transparent pixels.
  */
 export function quantizePalette(imageData: ImageData, colors: number): RGBA[] {
   const { data } = imageData;
+  const mixed = mixedPixels(imageData);
   const bins = new Map<
     number,
     { n: number; r: number; g: number; b: number }
@@ -65,6 +107,7 @@ export function quantizePalette(imageData: ImageData, colors: number): RGBA[] {
       transparent = true;
       continue;
     }
+    if (mixed[i / 4]) continue;
     const key =
       ((data[i] >> 3) << 10) | ((data[i + 1] >> 3) << 5) | (data[i + 2] >> 3);
     const bin = bins.get(key) ?? { n: 0, r: 0, g: 0, b: 0 };

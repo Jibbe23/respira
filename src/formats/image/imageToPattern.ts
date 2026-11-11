@@ -22,6 +22,8 @@ import {
 } from "./crossStitch";
 import {
   tatamiFill,
+  offsetRings,
+  holeClosesAt,
   runAroundRing,
   repeatClosedRun,
   regionArea,
@@ -37,7 +39,7 @@ import {
   type TracedImage,
 } from "./traceImage";
 import { createTravelGraph, connectBlocks } from "./travel";
-import { satinStitches } from "./satin";
+import { planSatin, sewSatin, type SatinPlan } from "./satin";
 
 export type FillDensity = "normal" | "dense";
 export type FillType = "tatami" | "cross";
@@ -57,7 +59,12 @@ export interface ImageToPatternOptions {
 }
 
 /** Stitch parameters (0.1 mm units) */
-const ROW_SPACING: Record<FillDensity, number> = { normal: 4.5, dense: 3.5 };
+const ROW_SPACING: Record<FillDensity, number> = { normal: 4, dense: 3.4 };
+/**
+ * Fill rows reach this far past the edge: the fabric pulls them in, and
+ * neighbouring areas overlap instead of leaving a gap (0.3 mm)
+ */
+const FILL_PULL_COMPENSATION = 3;
 /** Satin for strokes up to 5 mm wide (lettering, contour lines) */
 const SATIN = { pullCompensation: 2, underlayStitch: 20, maxWidth: 50 };
 const SATIN_SPACING: Record<FillDensity, number> = { normal: 4, dense: 3 };
@@ -81,8 +88,11 @@ const TRAVEL_STITCH_LENGTH = 25;
 /** Row spacing of the travel graph (coarser than the fill, enough to route) */
 const TRAVEL_GRAPH_SPACING = 15;
 
-/** Room kept for lock stitches when fitting the height (0.5 mm) */
-const FIT_MARGIN = 5;
+/**
+ * Room kept when fitting width and height (1 mm): fill and satin reach past
+ * the edges on both sides, lock stitches a little more
+ */
+const FIT_MARGIN = 10;
 
 const brotherColors = getAllBrotherColors();
 
@@ -304,7 +314,7 @@ function groupRegionsByThread(
   }
   // Lock stitches reach a little beyond the outline
   const scale = Math.min(
-    (options.widthMm * 10) / Math.max(1, maxX - minX),
+    (options.widthMm * 10 - FIT_MARGIN) / Math.max(1, maxX - minX),
     options.maxHeightMm
       ? (options.maxHeightMm * 10 - FIT_MARGIN) / Math.max(1, maxY - minY)
       : Infinity,
@@ -385,10 +395,62 @@ function createStitchWriter(maxTravel: number) {
   };
 }
 
+const satinOptions = (options: ImageToPatternOptions) => ({
+  ...SATIN,
+  spacing: SATIN_SPACING[options.density],
+});
+
+/** Share of a thread sewn in satin from which its lines get their own block */
+const SPLIT_LINE_SHARE = 0.25;
+
+/**
+ * Sewing order: lines sewn in satin (lettering, contour lines) come after
+ * all areas, so they lie on top of the area edges; areas keep their order
+ * (largest thread first). A thread that is mostly lines moves to the end as
+ * a whole; one with a fair share of both is split into an area block and a
+ * line block; a few narrow strips of an area color stay with it (no extra
+ * thread change for them).
+ */
+function orderForSewing(
+  groups: ThreadGroup<Ring[]>[],
+  options: ImageToPatternOptions,
+): { groups: ThreadGroup<Ring[]>[]; satin: Map<Ring[], SatinPlan> } {
+  const satin = new Map<Ring[], SatinPlan>();
+  const areas: ThreadGroup<Ring[]>[] = [];
+  const lines: ThreadGroup<Ring[]>[] = [];
+  for (const group of groups) {
+    const line: ThreadGroup<Ring[]> = {
+      color: group.color,
+      items: [],
+      area: 0,
+    };
+    const area: ThreadGroup<Ring[]> = {
+      color: group.color,
+      items: [],
+      area: 0,
+    };
+    for (const rings of group.items) {
+      const plan = planSatin(rings, satinOptions(options));
+      if (plan) satin.set(rings, plan);
+      const target = plan ? line : area;
+      target.items.push(rings);
+      target.area += regionArea(rings);
+    }
+    const share = line.area / Math.max(1, group.area);
+    if (share > 0.5) lines.push(group);
+    else if (share >= SPLIT_LINE_SHARE) {
+      areas.push(area);
+      lines.push(line);
+    } else areas.push(group);
+  }
+  return { groups: [...areas, ...lines], satin };
+}
+
 /** Tatami stitches: per region underlay, fill and outline */
 function regionsToStitches(
   groups: ThreadGroup<Ring[]>[],
   options: ImageToPatternOptions,
+  satin: Map<Ring[], SatinPlan>,
 ): number[][] {
   const writer = createStitchWriter(MAX_TRAVEL_STITCH);
   groups.forEach((group, colorIndex) => {
@@ -413,19 +475,56 @@ function regionsToStitches(
       }
       const [rings] = remaining.splice(index, 1);
 
-      // Narrow shapes: satin across the stroke instead of a tatami fill
-      const satin = satinStitches(rings, writer.position, {
-        ...SATIN,
-        spacing: SATIN_SPACING[options.density],
-      });
-      if (satin) {
-        satin.forEach(sew);
+      // Outline along the edge
+      const sewOutline = (
+        sewRuns: (runs: Point[][]) => void,
+        repeats: Repeats,
+      ) => {
+        for (const [i, ring] of rings.entries()) {
+          // Holes too small to stay open under the grown fill get none
+          if (i > 0 && holeClosesAt(ring, FILL_PULL_COMPENSATION)) continue;
+          const outline = runAroundRing(
+            ring,
+            OUTLINE_STITCH_LENGTH,
+            writer.position ?? undefined,
+          );
+          sewRuns([repeatClosedRun(outline, repeats)]);
+        }
+      };
+
+      // Narrow shapes: satin across the stroke instead of a tatami fill.
+      // The outline goes first (edge run): it makes the edge crisp, and the
+      // satin covers the stitches between outer edge and holes (an outline
+      // on top would need travel across the finished letter)
+      const plan = satin.get(rings);
+      if (plan) {
+        // Travel inside the letter (covered by the satin), not across it
+        const graph = createTravelGraph(
+          rings,
+          FILL_ANGLE,
+          TRAVEL_GRAPH_SPACING,
+        );
+        const sewInside = (runs: Point[][]) =>
+          connectBlocks(runs, graph, writer.position, {
+            travelStitch: TRAVEL_STITCH_LENGTH,
+            // A satin run is underlay out, satin back: never reversed
+            allowReverse: false,
+          }).forEach(sew);
+        sewOutline(sewInside, options.outlineRepeats);
+        sewInside(sewSatin(plan, writer.position, satinOptions(options)));
         continue;
       }
 
       // Underlay, fill and outline as one thread: travel inside the region
       // instead of jumping (and trimming) between blocks
-      const graph = createTravelGraph(rings, FILL_ANGLE, TRAVEL_GRAPH_SPACING);
+      // The fill reaches past the edge on all sides (pull compensation)
+      const fillRings = offsetRings(rings, FILL_PULL_COMPENSATION);
+      const graph = createTravelGraph(
+        fillRings,
+        FILL_ANGLE,
+        TRAVEL_GRAPH_SPACING,
+        "nonzero",
+      );
       const sewBlocks = (blocks: Point[][]) =>
         connectBlocks(blocks, graph, writer.position, {
           travelStitch: TRAVEL_STITCH_LENGTH,
@@ -435,20 +534,14 @@ function regionsToStitches(
         sewBlocks(tatamiFill(rings, { angle: FILL_ANGLE + 90, ...UNDERLAY }));
       }
       sewBlocks(
-        tatamiFill(rings, {
+        tatamiFill(fillRings, {
           angle: FILL_ANGLE,
+          rule: "nonzero",
           spacing: ROW_SPACING[options.density],
           stitchLength: FILL_STITCH_LENGTH,
         }),
       );
-      for (const ring of rings) {
-        const outline = runAroundRing(
-          ring,
-          OUTLINE_STITCH_LENGTH,
-          writer.position ?? undefined,
-        );
-        sewBlocks([repeatClosedRun(outline, options.outlineRepeats)]);
-      }
+      sewOutline(sewBlocks, options.outlineRepeats);
     }
   });
   return writer.stitches;
@@ -536,9 +629,12 @@ export function imageToPattern(
     stitches = cellsToStitches(cellGroups, options);
   } else {
     const regions = traceImage(image, traced.palette, traced.backgroundIndex);
-    const regionGroups = groupRegionsByThread(regions, traced.threads, options);
-    groups = regionGroups;
-    stitches = regionsToStitches(regionGroups, options);
+    const order = orderForSewing(
+      groupRegionsByThread(regions, traced.threads, options),
+      options,
+    );
+    groups = order.groups;
+    stitches = regionsToStitches(order.groups, options, order.satin);
   }
   stitches = roundStitches(stitches);
   if (stitches.length < 2) return null;
