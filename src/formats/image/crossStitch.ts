@@ -47,6 +47,7 @@ export function crossStitchGrid(
   backgroundIndex: number | null,
   width: number,
   cellSize: number,
+  maxHeight = Infinity,
 ): CrossCell[] {
   const { width: w, height: h } = image;
   const indices = mapPixels(image, palette);
@@ -69,10 +70,15 @@ export function crossStitchGrid(
 
   const contentWidth = maxX - minX + 1;
   const contentHeight = maxY - minY + 1;
-  // Whole cells that fit into the width; square cells in the image
-  const cols = Math.max(1, Math.floor(width / cellSize));
+  // Whole cells that fit into the width (and height); square cells in the
+  // image
+  const maxRows = Math.max(1, Math.floor(maxHeight / cellSize));
+  const rowsFor = (cols: number) =>
+    Math.max(1, Math.round((contentHeight * cols) / contentWidth));
+  let cols = Math.max(1, Math.floor(width / cellSize));
+  while (cols > 1 && rowsFor(cols) > maxRows) cols--;
   const cellPx = contentWidth / cols;
-  const rows = Math.max(1, Math.round(contentHeight / cellPx));
+  const rows = rowsFor(cols);
   const originX = (-cols * cellSize) / 2;
   const originY = (-rows * cellSize) / 2;
 

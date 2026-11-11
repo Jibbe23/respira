@@ -46,6 +46,7 @@ export type Repeats = 1 | 2 | 3;
 export interface ImageToPatternOptions {
   colors: number; // maximum number of thread colors
   widthMm: number; // width of the embroidery
+  maxHeightMm?: number; // narrower than widthMm if needed to fit this height
   removeBackground: boolean; // skip the dominant border color
   fill: FillType;
   density: FillDensity; // tatami row spacing
@@ -76,10 +77,30 @@ const TRAVEL_STITCH_LENGTH = 25;
 /** Row spacing of the travel graph (coarser than the fill, enough to route) */
 const TRAVEL_GRAPH_SPACING = 15;
 
+/** Room kept for lock stitches when fitting the height (0.5 mm) */
+const FIT_MARGIN = 5;
+
 const brotherColors = getAllBrotherColors();
 
-/** sRGB to OKLab (perceptual color space, also even for blue hues) */
+const oklabCache = new Map<number, [number, number, number]>();
+
+/** sRGB to OKLab (cached: thread colors are compared again and again) */
 function toOklab(r: number, g: number, b: number): [number, number, number] {
+  const key = (r << 16) | (g << 8) | b;
+  let lab = oklabCache.get(key);
+  if (!lab) {
+    lab = computeOklab(r, g, b);
+    oklabCache.set(key, lab);
+  }
+  return lab;
+}
+
+/** sRGB to OKLab (perceptual color space, also even for blue hues) */
+function computeOklab(
+  r: number,
+  g: number,
+  b: number,
+): [number, number, number] {
   const linear = (v: number) => {
     const c = v / 255;
     return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
@@ -122,33 +143,83 @@ const colorDistance = (a: BrotherColor, b: BrotherColor) =>
   rgbDistance(a.R, a.G, a.B, b.R, b.G, b.B);
 
 /**
- * Brother thread for each palette color (null for the background), a
- * different thread for each color: colors the palette tells apart (e.g. skin
- * and cream) may have the same nearest thread. Closest pairs are matched
- * first, so the color nearer to a thread gets it and the other one the
- * nearest thread left.
+ * Brother thread for each palette color (null for the background and
+ * transparent colors). Colors nearest to their thread claim it first. A
+ * color whose nearest thread is taken gets a thread of its own only if one
+ * is closer to it than the color owning that thread (e.g. skin next to
+ * cream); otherwise both share it (e.g. shades of one red).
  */
 function assignThreads(
   palette: RGBA[],
   backgroundIndex: number | null,
 ): (BrotherColor | null)[] {
-  const pairs = palette.flatMap((c, i) =>
-    i === backgroundIndex
-      ? []
-      : brotherColors.map((thread) => ({
-          i,
-          thread,
-          d: rgbDistance(thread.R, thread.G, thread.B, c.r, c.g, c.b),
-        })),
-  );
-  pairs.sort((a, b) => a.d - b.d);
   const result: (BrotherColor | null)[] = palette.map(() => null);
-  const used = new Set<string>();
-  for (const { i, thread } of pairs) {
-    if (result[i] || used.has(thread.ColorCode)) continue;
-    result[i] = thread;
-    used.add(thread.ColorCode);
+  const distanceTo = (c: RGBA, t: { R: number; G: number; B: number }) =>
+    rgbDistance(c.r, c.g, c.b, t.R, t.G, t.B);
+  const candidates = palette
+    .map((c, i) => ({
+      i,
+      ranked: [...brotherColors].sort(
+        (a, b) => distanceTo(c, a) - distanceTo(c, b),
+      ),
+    }))
+    .filter(({ i }) => i !== backgroundIndex && palette[i].a >= 128)
+    .sort(
+      (a, b) =>
+        distanceTo(palette[a.i], a.ranked[0]) -
+        distanceTo(palette[b.i], b.ranked[0]),
+    );
+
+  const owner = new Map<string, number>(); // thread code to palette index
+  for (const { i, ranked } of candidates) {
+    const color = palette[i];
+    const nearest = ranked[0];
+    const taken = owner.get(nearest.ColorCode);
+    const free = ranked.find((t) => !owner.has(t.ColorCode));
+    const other = taken === undefined ? null : palette[taken];
+    const own =
+      other === null
+        ? nearest
+        : free &&
+            distanceTo(color, free) <
+              rgbDistance(color.r, color.g, color.b, other.r, other.g, other.b)
+          ? free
+          : null;
+    result[i] = own ?? nearest;
+    if (own) owner.set(own.ColorCode, i);
   }
+  return result;
+}
+
+/**
+ * Palette for tracing: colors sharing a thread are merged into the first one,
+ * so their areas are traced (and sewn) as one region
+ */
+function tracingPalette(
+  palette: RGBA[],
+  threads: (BrotherColor | null)[],
+  backgroundIndex: number | null,
+): {
+  palette: RGBA[];
+  threads: (BrotherColor | null)[];
+  backgroundIndex: number | null;
+} {
+  const seen = new Set<string>();
+  const result = {
+    palette: [] as RGBA[],
+    threads: [] as (BrotherColor | null)[],
+    backgroundIndex: null as number | null,
+  };
+  palette.forEach((color, i) => {
+    const thread = threads[i];
+    if (thread) {
+      if (seen.has(thread.ColorCode)) return;
+      seen.add(thread.ColorCode);
+    }
+    if (i === backgroundIndex) result.backgroundIndex = result.palette.length;
+    result.palette.push(color);
+    result.threads.push(thread);
+  });
   return result;
 }
 
@@ -227,7 +298,13 @@ function groupRegionsByThread(
       maxY = Math.max(maxY, p.y);
     }
   }
-  const scale = (options.widthMm * 10) / Math.max(1, maxX - minX);
+  // Lock stitches reach a little beyond the outline
+  const scale = Math.min(
+    (options.widthMm * 10) / Math.max(1, maxX - minX),
+    options.maxHeightMm
+      ? (options.maxHeightMm * 10 - FIT_MARGIN) / Math.max(1, maxY - minY)
+      : Infinity,
+  );
   const cx = (minX + maxX) / 2;
   const cy = (minY + maxY) / 2;
   const toPattern = (p: Point): Point => ({
@@ -240,7 +317,8 @@ function groupRegionsByThread(
     const rings = region.rings.map((ring) => ring.map(toPattern));
     const area = regionArea(rings);
     if (area < MIN_REGION_AREA) continue;
-    addToGroup(groups, threads[region.colorIndex]!, rings, area);
+    const thread = threads[region.colorIndex];
+    if (thread) addToGroup(groups, thread, rings, area);
   }
   return mergeGroups([...groups.values()], options.colors);
 }
@@ -262,11 +340,13 @@ function groupCellsByThread(
     backgroundIndex,
     options.widthMm * 10,
     options.crossSizeMm * 10,
+    options.maxHeightMm ? options.maxHeightMm * 10 - FIT_MARGIN : Infinity,
   );
   const groups = new Map<string, ThreadGroup<CrossCell>>();
   const cellArea = (options.crossSizeMm * 10) ** 2;
   for (const cell of grid) {
-    addToGroup(groups, threads[cell.colorIndex]!, cell, cellArea);
+    const thread = threads[cell.colorIndex];
+    if (thread) addToGroup(groups, thread, cell, cellArea);
   }
   return mergeGroups([...groups.values()], options.colors);
 }
@@ -422,23 +502,27 @@ export function imageToPattern(
   const background = options.removeBackground
     ? findBackground(image, palette)
     : null;
-  const paletteThreads = assignThreads(palette, background);
+  const traced = tracingPalette(
+    palette,
+    assignThreads(palette, background),
+    background,
+  );
 
   let groups: ThreadGroup<unknown>[];
   let stitches: number[][];
   if (options.fill === "cross") {
     const cellGroups = groupCellsByThread(
       image,
-      palette,
-      background,
-      paletteThreads,
+      traced.palette,
+      traced.backgroundIndex,
+      traced.threads,
       options,
     );
     groups = cellGroups;
     stitches = cellsToStitches(cellGroups, options);
   } else {
-    const traced = traceImage(image, palette, background);
-    const regionGroups = groupRegionsByThread(traced, paletteThreads, options);
+    const regions = traceImage(image, traced.palette, traced.backgroundIndex);
+    const regionGroups = groupRegionsByThread(regions, traced.threads, options);
     groups = regionGroups;
     stitches = regionsToStitches(regionGroups, options);
   }
@@ -475,32 +559,8 @@ export function imageToPattern(
   };
 }
 
-/** Height of a converted pattern in mm */
-export const patternHeightMm = (pattern: PesPatternData) =>
-  (pattern.bounds.maxY - pattern.bounds.minY) / 10;
-
-/**
- * Convert at the asked width; if the design is then taller than
- * `maxHeightMm`, convert again narrower so the height fits (instead of
- * refusing it). Returns the width actually used.
- */
-export function imageToPatternFitting(
-  imageData: ImageData,
-  options: ImageToPatternOptions,
-  maxHeightMm: number,
-  minWidthMm: number,
-): { pattern: PesPatternData | null; widthMm: number } {
-  let widthMm = options.widthMm;
-  let pattern = imageToPattern(imageData, options);
-  // Stitch bounds scale almost linearly, a second try is rarely needed
-  for (let attempt = 0; attempt < 3 && pattern; attempt++) {
-    const height = patternHeightMm(pattern);
-    if (height <= maxHeightMm || widthMm <= minWidthMm) break;
-    widthMm = Math.max(
-      minWidthMm,
-      Math.min(widthMm - 1, Math.floor((widthMm * maxHeightMm) / height)),
-    );
-    pattern = imageToPattern(imageData, { ...options, widthMm });
-  }
-  return { pattern, widthMm };
-}
+/** Size of a converted pattern in mm */
+export const patternSizeMm = (pattern: PesPatternData) => ({
+  width: (pattern.bounds.maxX - pattern.bounds.minX) / 10,
+  height: (pattern.bounds.maxY - pattern.bounds.minY) / 10,
+});
