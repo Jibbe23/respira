@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { imageToPattern, type ImageToPatternOptions } from "./imageToPattern";
+import {
+  imageToPattern,
+  imageToPatternFitting,
+  patternHeightMm,
+  type ImageToPatternOptions,
+} from "./imageToPattern";
 import { crossStitchRuns } from "./crossStitch";
 import {
   tatamiFill,
@@ -219,7 +224,8 @@ describe("imageToPattern", () => {
     expect(threads).toHaveLength(2);
     const names = threads.map((t) => t.description);
     expect(names.some((n) => /RED/i.test(n ?? ""))).toBe(true);
-    expect(names.some((n) => /BLUE/i.test(n ?? ""))).toBe(true);
+    // A blue thread (pure blue is nearest to ULTRA MARINE)
+    expect(names.some((n) => /BLUE|MARINE/i.test(n ?? ""))).toBe(true);
 
     // Width as requested (lock stitches add a few tenths of a millimetre)
     expect(Math.abs(bounds.maxX - bounds.minX - 600)).toBeLessThanOrEqual(10);
@@ -274,6 +280,64 @@ describe("imageToPattern", () => {
     expect(pattern!.threads.map((t) => t.description)).toEqual([
       expect.stringMatching(/RED|CARMINE/i),
     ]);
+  });
+
+  it("keeps small details such as a full stop", () => {
+    // Square on the left, a 6 × 6 px dot at the right edge: 60 mm over
+    // 376 px makes the dot about 0.9 mm²
+    const BLACK: Pixel = [0, 0, 0, 255];
+    const image = makeImage(400, 200, (x, y) => {
+      if (x >= 10 && x < 200 && y >= 10 && y < 190) return BLACK;
+      if (x >= 380 && x < 386 && y >= 150 && y < 156) return BLACK;
+      return WHITE;
+    });
+    const { stitches } = imageToPattern(image, {
+      colors: 1,
+      widthMm: 60,
+      removeBackground: true,
+      ...TATAMI,
+    })!;
+    // The square ends near the center, the dot is near +29 mm
+    expect(stitches.some((s) => !(s[2] & MOVE) && s[0] > 250)).toBe(true);
+  });
+
+  it("gives colors with the same nearest thread their own threads", () => {
+    // Two creams told apart by the palette, both nearest to LINEN
+    const CREAM: Pixel = [241, 232, 216, 255];
+    const SKIN: Pixel = [250, 225, 195, 255];
+    const image = makeImage(120, 60, (x, y) => {
+      if (y < 10 || y >= 50 || x < 10 || x >= 110) return WHITE;
+      return x < 60 ? CREAM : SKIN;
+    });
+    const { threads } = imageToPattern(image, {
+      colors: 2,
+      widthMm: 60,
+      removeBackground: true,
+      ...TATAMI,
+    })!;
+    expect(threads).toHaveLength(2);
+    expect(threads[0].catalogNumber).not.toBe(threads[1].catalogNumber);
+  });
+
+  it("scales a design down until it fits the hoop height", () => {
+    // 40 × 100 px: 80 mm wide would be 200 mm tall
+    const tall = makeImage(60, 120, (x, y) =>
+      x >= 10 && x < 50 && y >= 10 && y < 110 ? RED : WHITE,
+    );
+    const options = {
+      colors: 1,
+      widthMm: 80,
+      removeBackground: true,
+      ...TATAMI,
+    };
+    expect(patternHeightMm(imageToPattern(tall, options)!)).toBeGreaterThan(
+      100,
+    );
+
+    const { pattern, widthMm } = imageToPatternFitting(tall, options, 100, 10);
+    expect(widthMm).toBeLessThan(80);
+    expect(patternHeightMm(pattern!)).toBeLessThanOrEqual(100);
+    expect(patternHeightMm(pattern!)).toBeGreaterThan(95);
   });
 
   it("returns null when only the background is left", () => {

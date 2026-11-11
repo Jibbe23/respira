@@ -22,7 +22,8 @@ import {
 import type { PesPatternData } from "../../formats/import/pesImporter";
 import { loadImageData } from "../../formats/image/loadImage";
 import {
-  imageToPattern,
+  imageToPatternFitting,
+  patternHeightMm,
   type FillDensity,
   type FillType,
   type ImageToPatternOptions,
@@ -46,7 +47,13 @@ interface ImageToEmbroideryDialogProps {
 interface Conversion {
   source: { imageData: ImageData; name: string };
   options: ImageToPatternOptions;
-  result: { pattern: PesPatternData | null } | { error: string };
+  result:
+    | {
+        pattern: PesPatternData | null;
+        // Width actually used (smaller than asked when the height did not fit)
+        widthMm: number;
+      }
+    | { error: string };
 }
 
 const CROSS_SIZES_MM = [2, 2.5, 3, 4];
@@ -188,9 +195,12 @@ export function ImageToEmbroideryDialog({
         if (cancelled) return;
         let result: Conversion["result"];
         try {
-          result = {
-            pattern: imageToPattern(source.imageData, options),
-          };
+          result = imageToPatternFitting(
+            source.imageData,
+            options,
+            hoopHeightMm,
+            MIN_WIDTH_MM,
+          );
         } catch (err) {
           result = {
             error: err instanceof Error ? err.message : "Conversion failed",
@@ -204,7 +214,7 @@ export function ImageToEmbroideryDialog({
       clearTimeout(timer);
       clearTimeout(inner);
     };
-  }, [source, options]);
+  }, [source, options, hoopHeightMm]);
 
   // Only a result for the current image and settings counts
   const current =
@@ -213,6 +223,7 @@ export function ImageToEmbroideryDialog({
       : null;
   const isWorking = !!source && !current;
   const pattern = current && "pattern" in current ? current.pattern : null;
+  const usedWidth = current && "pattern" in current ? current.widthMm : width;
   const conversionError = current && "error" in current ? current.error : null;
 
   useEffect(() => {
@@ -232,9 +243,7 @@ export function ImageToEmbroideryDialog({
     [imageUrl],
   );
 
-  const heightMm = pattern
-    ? (pattern.bounds.maxY - pattern.bounds.minY) / 10
-    : null;
+  const heightMm = pattern ? patternHeightMm(pattern) : null;
   const tooLarge = heightMm !== null && heightMm > hoopHeightMm;
 
   const handleApply = () => {
@@ -412,7 +421,7 @@ export function ImageToEmbroideryDialog({
           {pattern && (
             <div className="flex flex-col gap-1 text-xs text-gray-700 dark:text-gray-300">
               <span>
-                {width} × {heightMm?.toFixed(1)} mm ·{" "}
+                {usedWidth} × {heightMm?.toFixed(1)} mm ·{" "}
                 {pattern.penStitches.stitches.length.toLocaleString()} stitches
                 · {pattern.threads.length} thread colors
               </span>
@@ -427,6 +436,12 @@ export function ImageToEmbroideryDialog({
                   </span>
                 ))}
               </span>
+              {usedWidth < width && !tooLarge && (
+                <span className="text-info-700 dark:text-info-300">
+                  Scaled down from {width} mm wide so the height fits the hoop (
+                  {hoopWidthMm} × {hoopHeightMm} mm).
+                </span>
+              )}
               {tooLarge && (
                 <span className="text-warning-700 dark:text-warning-400">
                   Taller than the hoop ({hoopWidthMm} × {hoopHeightMm} mm).
