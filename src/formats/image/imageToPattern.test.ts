@@ -598,6 +598,57 @@ describe("imageToPattern", () => {
     expect(crossing).toHaveLength(0);
   });
 
+  it("gives the gray along a straight edge the color of a side", () => {
+    // A black bar with a 1 px gray column along its edge (as scaling a black
+    // and white image makes it) and a pink square: gray is closer to pink
+    // than to black or white, but must not become a pink strip at the bar
+    const BLACK: Pixel = [0, 0, 0, 255];
+    const PINK: Pixel = [231, 181, 196, 255];
+    const image = makeImage(200, 120, (x, y) => {
+      if (y >= 10 && y < 110 && x >= 20 && x < 60) return BLACK;
+      if (y >= 10 && y < 110 && x === 60) return [106, 106, 106, 255];
+      if (y >= 30 && y < 90 && x >= 120 && x < 180) return PINK;
+      return WHITE;
+    });
+    const { stitches, threads } = imageToPattern(image, {
+      colors: 2,
+      widthMm: 40,
+      removeBackground: true,
+      ...TATAMI,
+    })!;
+    const pink = threads.findIndex((t) => t.hex.toUpperCase() !== "#000000");
+    expect(pink).toBeGreaterThanOrEqual(0);
+    // Pink only at the square (right of the middle), none at the bar
+    const atBar = stitches.filter((s) => s[3] === pink && s[0] < 0);
+    expect(atBar).toHaveLength(0);
+  });
+
+  it("gives a blurred edge several pixels wide the colors of its sides", () => {
+    // An enlarged image: black to white over 4 gray pixels next to a pink
+    // area; gray must not become pink
+    const BLACK: Pixel = [0, 0, 0, 255];
+    const PINK: Pixel = [231, 181, 196, 255];
+    const ramp = [51, 102, 153, 204];
+    const image = makeImage(200, 120, (x, y) => {
+      if (y >= 10 && y < 110 && x >= 20 && x < 60) return BLACK;
+      if (y >= 10 && y < 110 && x >= 60 && x < 64) {
+        const v = ramp[x - 60];
+        return [v, v, v, 255];
+      }
+      if (y >= 30 && y < 90 && x >= 120 && x < 180) return PINK;
+      return WHITE;
+    });
+    const { stitches, threads } = imageToPattern(image, {
+      colors: 2,
+      widthMm: 40,
+      removeBackground: true,
+      ...TATAMI,
+    })!;
+    const pink = threads.findIndex((t) => t.hex.toUpperCase() !== "#000000");
+    expect(pink).toBeGreaterThanOrEqual(0);
+    expect(stitches.filter((s) => s[3] === pink && s[0] < 0)).toHaveLength(0);
+  });
+
   it("returns null when only the background is left", () => {
     const blank = makeImage(40, 40, () => WHITE);
     expect(
@@ -853,30 +904,5 @@ describe("quantizePalette", () => {
     // The 1 px lines keep their color, their gray edges get none
     expect(near([0, 0, 0])).toBe(true);
     expect(near([128, 128, 128])).toBe(false);
-  });
-
-  it("gives the gray along a straight edge the color of a side", () => {
-    // A black bar with a 1 px gray column along its edge (as scaling a black
-    // and white image makes it) and a pink square: gray is closer to pink
-    // than to black or white, but must not become a pink strip at the bar
-    const BLACK: Pixel = [0, 0, 0, 255];
-    const PINK: Pixel = [231, 181, 196, 255];
-    const image = makeImage(200, 120, (x, y) => {
-      if (y >= 10 && y < 110 && x >= 20 && x < 60) return BLACK;
-      if (y >= 10 && y < 110 && x === 60) return [106, 106, 106, 255];
-      if (y >= 30 && y < 90 && x >= 120 && x < 180) return PINK;
-      return WHITE;
-    });
-    const { stitches, threads } = imageToPattern(image, {
-      colors: 2,
-      widthMm: 40,
-      removeBackground: true,
-      ...TATAMI,
-    })!;
-    const pink = threads.findIndex((t) => t.hex.toUpperCase() !== "#000000");
-    expect(pink).toBeGreaterThanOrEqual(0);
-    // Pink only at the square (right of the middle), none at the bar
-    const atBar = stitches.filter((s) => s[3] === pink && s[0] < 0);
-    expect(atBar).toHaveLength(0);
   });
 });

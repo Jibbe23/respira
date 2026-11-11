@@ -49,67 +49,99 @@ const PALETTE_ITERATIONS = 10;
 /** Neighbours closer than this (RGB distance) are not an edge to mix across */
 const MIN_EDGE_CONTRAST = 40;
 
+/** Mixed edge pixel between its left and right / upper and lower neighbour */
+const MIXED_ACROSS_X = 1;
+const MIXED_ACROSS_Y = 2;
+/** Widest blurred edge (pixels) whose pixels are snapped to a side */
+const MAX_EDGE_WIDTH = 6;
+
 /**
  * Pixels whose color is a mix of their two opposite neighbours (left and
  * right, or above and below): anti-aliased edges, and the mixed colors that
- * scaling an image adds along every edge. For each such pixel the byte
- * offset of the neighbour it is closer to (its side of the edge); -1 for
- * all other pixels.
+ * scaling an image adds along every edge. MIXED_ACROSS_X or MIXED_ACROSS_Y
+ * for such a pixel (the direction across its edge), 0 for all others.
  */
-function mixedPixelSides({ data, width, height }: ImageData): Int32Array {
-  const sides = new Int32Array(width * height).fill(-1);
-  // Position of pixel i between neighbours a and b (0 = a, 1 = b), or -1
-  const mixAt = (i: number, a: number, b: number) => {
-    if (data[a + 3] < 128 || data[b + 3] < 128) return -1;
+function mixedPixels({ data, width, height }: ImageData): Uint8Array {
+  const mixed = new Uint8Array(width * height);
+  const isMix = (i: number, a: number, b: number) => {
+    if (data[a + 3] < 128 || data[b + 3] < 128) return false;
     const dr = data[b] - data[a];
     const dg = data[b + 1] - data[a + 1];
     const db = data[b + 2] - data[a + 2];
     const length2 = dr * dr + dg * dg + db * db;
-    if (length2 < MIN_EDGE_CONTRAST ** 2) return -1;
+    if (length2 < MIN_EDGE_CONTRAST ** 2) return false;
     const pr = data[i] - data[a];
     const pg = data[i + 1] - data[a + 1];
     const pb = data[i + 2] - data[a + 2];
     const t = (pr * dr + pg * dg + pb * db) / length2;
-    if (t < 0.1 || t > 0.9) return -1;
+    if (t < 0.1 || t > 0.9) return false;
     const off = Math.hypot(pr - t * dr, pg - t * dg, pb - t * db);
-    return off < Math.max(12, 0.25 * Math.sqrt(length2)) ? t : -1;
+    return off < Math.max(12, 0.25 * Math.sqrt(length2));
   };
   for (let y = 1; y < height - 1; y++) {
     for (let x = 1; x < width - 1; x++) {
       const i = (y * width + x) * 4;
       if (data[i + 3] < 128) continue;
-      for (const [a, b] of [
-        [i - 4, i + 4],
-        [i - width * 4, i + width * 4],
-      ]) {
-        const t = mixAt(i, a, b);
-        if (t >= 0) {
-          sides[y * width + x] = t < 0.5 ? a : b;
-          break;
-        }
+      if (isMix(i, i - 4, i + 4)) mixed[y * width + x] = MIXED_ACROSS_X;
+      else if (isMix(i, i - width * 4, i + width * 4)) {
+        mixed[y * width + x] = MIXED_ACROSS_Y;
       }
     }
   }
-  return sides;
+  return mixed;
 }
 
 /**
- * The image with every mixed edge pixel (see mixedPixelSides) set to the
- * color of its side: a 1 px gray seam along a straight black edge on white
- * would otherwise be traced as a strip of whatever palette color is
- * closest to gray (e.g. a light pink)
+ * The image with every mixed edge pixel set to the color of the side of
+ * the edge it is closer to: a gray seam along a straight black edge on
+ * white would otherwise be traced as a strip of whatever palette color is
+ * closest to gray (e.g. a light pink). Blurred edges several pixels wide
+ * (an enlarged image) are followed to their solid colors on both sides; a
+ * pixel right in the middle goes to the darker side.
  */
 export function snapMixedPixels(imageData: ImageData): ImageData {
-  const sides = mixedPixelSides(imageData);
-  const data = new Uint8ClampedArray(imageData.data);
-  sides.forEach((side, p) => {
-    if (side < 0) return;
-    // From the original data: a neighbour may be a mixed pixel itself
-    data.set(imageData.data.subarray(side, side + 4), p * 4);
-  });
+  const { data: source, width, height } = imageData;
+  const mixed = mixedPixels(imageData);
+  const data = new Uint8ClampedArray(source);
+  const luminance = (i: number) => source[i] + source[i + 1] + source[i + 2];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const p = y * width + x;
+      if (!mixed[p]) continue;
+      const [dx, dy] = mixed[p] === MIXED_ACROSS_X ? [1, 0] : [0, 1];
+      // First pixel on each side that is no longer part of the edge
+      const sideOf = (sign: number) => {
+        let sx = x;
+        let sy = y;
+        for (let k = 0; k < MAX_EDGE_WIDTH; k++) {
+          const nx = sx + sign * dx;
+          const ny = sy + sign * dy;
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) break;
+          sx = nx;
+          sy = ny;
+          if (!mixed[sy * width + sx]) break;
+        }
+        return (sy * width + sx) * 4;
+      };
+      const a = sideOf(-1);
+      const b = sideOf(1);
+      const i = p * 4;
+      let t = 0;
+      let length2 = 0;
+      for (let c = 0; c < 3; c++) {
+        const d = source[b + c] - source[a + c];
+        t += (source[i + c] - source[a + c]) * d;
+        length2 += d * d;
+      }
+      t /= Math.max(1, length2);
+      const side =
+        t < 0.5 ? a : t > 0.5 ? b : luminance(a) <= luminance(b) ? a : b;
+      data.set(source.subarray(side, side + 4), i);
+    }
+  }
   return {
-    width: imageData.width,
-    height: imageData.height,
+    width,
+    height,
     data,
     colorSpace: imageData.colorSpace,
   } as ImageData;
@@ -128,7 +160,7 @@ export function snapMixedPixels(imageData: ImageData): ImageData {
  */
 export function quantizePalette(imageData: ImageData, colors: number): RGBA[] {
   const { data } = imageData;
-  const mixed = mixedPixelSides(imageData);
+  const mixed = mixedPixels(imageData);
   const bins = new Map<
     number,
     { n: number; r: number; g: number; b: number }
@@ -139,7 +171,7 @@ export function quantizePalette(imageData: ImageData, colors: number): RGBA[] {
       transparent = true;
       continue;
     }
-    if (mixed[i / 4] >= 0) continue;
+    if (mixed[i / 4]) continue;
     const key =
       ((data[i] >> 3) << 10) | ((data[i + 1] >> 3) << 5) | (data[i + 2] >> 3);
     const bin = bins.get(key) ?? { n: 0, r: 0, g: 0, b: 0 };

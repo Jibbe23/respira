@@ -630,8 +630,10 @@ export function imageToPattern(
   imageData: ImageData,
   options: ImageToPatternOptions,
 ): PesPatternData | null {
+  // Edge pixels on their side of the edge: no strips of a third color
+  // along edges (palette, background and tracing all see the same pixels)
+  const image = snapMixedPixels(binarizeAlpha(imageData));
   // The background takes a color slot of its own when it is left out
-  const image = binarizeAlpha(imageData);
   const palette = quantizePalette(
     image,
     options.colors + (options.removeBackground ? 1 : 0),
@@ -645,14 +647,11 @@ export function imageToPattern(
     background,
   );
 
-  // Trace with the edge pixels on their side: no strips of a third color
-  // along edges
-  const snapped = snapMixedPixels(image);
   let groups: ThreadGroup<unknown>[];
   let stitches: number[][];
   if (options.fill === "cross") {
     const cellGroups = groupCellsByThread(
-      snapped,
+      image,
       traced.palette,
       traced.backgroundIndex,
       traced.threads,
@@ -661,7 +660,7 @@ export function imageToPattern(
     groups = cellGroups;
     stitches = cellsToStitches(cellGroups, options);
   } else {
-    const regions = traceImage(snapped, traced.palette, traced.backgroundIndex);
+    const regions = traceImage(image, traced.palette, traced.backgroundIndex);
     const order = orderForSewing(
       groupRegionsByThread(regions, traced.threads, options),
       options,
