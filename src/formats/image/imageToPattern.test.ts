@@ -475,7 +475,7 @@ describe("imageToPattern", () => {
   });
 
   it("cuts between separate parts instead of stitching across the gap", () => {
-    // Two squares 2 mm apart (0.3 mm per px)
+    // Two squares with a 2 mm gap around x = 0
     const image = makeImage(100, 40, (x, y) => {
       if (y < 10 || y >= 30) return WHITE;
       if (x >= 10 && x < 40) return RED;
@@ -491,13 +491,13 @@ describe("imageToPattern", () => {
     const jumps = stitches.filter((s) => s[2] & MOVE);
     expect(jumps).toHaveLength(1);
     expect(jumps[0][2] & TRIM).toBeTruthy();
-    // No stitch (sewn) crosses the gap between x = -1.5 mm and +0.6 mm
+    // No sewn stitch crosses the middle of the gap
     const crossing = stitches.filter(
       (s, i) =>
         i > 0 &&
         !(s[2] & MOVE) &&
-        Math.min(s[0], stitches[i - 1][0]) < -20 &&
-        Math.max(s[0], stitches[i - 1][0]) > 10,
+        Math.min(s[0], stitches[i - 1][0]) < 0 &&
+        Math.max(s[0], stitches[i - 1][0]) > 0,
     );
     expect(crossing).toHaveLength(0);
   });

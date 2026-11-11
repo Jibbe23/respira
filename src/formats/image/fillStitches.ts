@@ -146,6 +146,52 @@ export function offsetRings(rings: Ring[], distance: number): Ring[] {
   return result;
 }
 
+/** Distance from p to the nearest edge of the rings */
+export function distanceToRings(p: Point, rings: Ring[]): number {
+  let best = Infinity;
+  for (const ring of rings) {
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i];
+      const b = ring[(i + 1) % ring.length];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const t = Math.max(
+        0,
+        Math.min(
+          1,
+          ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1),
+        ),
+      );
+      best = Math.min(best, Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy));
+    }
+  }
+  return best;
+}
+
+/** Is p inside the rings, by the same rule as the fill (see FillRule)? */
+export function insideRings(
+  p: Point,
+  rings: Ring[],
+  rule: FillRule = "evenodd",
+): boolean {
+  let winding = 0;
+  let crossings = 0;
+  for (const ring of rings) {
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i];
+      const b = ring[(i + 1) % ring.length];
+      if (a.y <= p.y !== b.y <= p.y) {
+        const x = a.x + ((p.y - a.y) / (b.y - a.y)) * (b.x - a.x);
+        if (x > p.x) {
+          crossings++;
+          winding += b.y > a.y ? 1 : -1;
+        }
+      }
+    }
+  }
+  return rule === "evenodd" ? crossings % 2 === 1 : winding !== 0;
+}
+
 /** Area of a region: outer ring minus holes */
 export function regionArea(rings: Ring[]): number {
   if (rings.length === 0) return 0;

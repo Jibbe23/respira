@@ -9,7 +9,9 @@
  */
 
 import {
+  distanceToRings,
   fillRowCrossings,
+  insideRings,
   runAlongPath,
   type FillRule,
   type Point,
@@ -21,7 +23,10 @@ import {
 const ROW_TRAVEL_COST = 2;
 /** Farther from the graph than this, a point is reached by a jump */
 const MAX_HOP = 30;
-/** The needle counts as in the region up to this far outside (0.5 mm) */
+/**
+ * A hop may start this far outside the region (0.5 mm): satin reaches a
+ * little past the edge
+ */
 const NEAR_REGION = 5;
 /** Candidates checked when looking for a node reachable in a straight line */
 const HOP_CANDIDATES = 8;
@@ -36,7 +41,9 @@ export interface TravelGraph {
   nodes: Point[];
   edges: TravelEdge[][];
   // Straight hops onto the graph must not cross these (none: no check)
+  // and must stay inside them by `rule`
   rings?: Ring[];
+  rule?: FillRule;
 }
 
 const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -63,7 +70,7 @@ export function createTravelGraph(
   spacing: number,
   rule: FillRule = "evenodd",
 ): TravelGraph {
-  const graph: TravelGraph = { nodes: [], edges: [], rings };
+  const graph: TravelGraph = { nodes: [], edges: [], rings, rule };
   const addNode = (p: Point) => {
     graph.nodes.push(p);
     graph.edges.push([]);
@@ -103,46 +110,12 @@ export function createTravelGraph(
   return graph;
 }
 
-/** Distance from p to segment ab */
-function segmentDistance(p: Point, a: Point, b: Point): number {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const t = Math.max(
-    0,
-    Math.min(
-      1,
-      ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1),
-    ),
-  );
-  return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
-}
-
-/**
- * Is p inside the rings (crossing count) or at most NEAR_REGION outside? A
- * needle in another region must not travel here: that stitch would cross
- * the gap between the two
- */
-function nearRegion(p: Point, rings: Ring[]): boolean {
-  let inside = false;
-  for (const ring of rings) {
-    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-      const a = ring[i];
-      const b = ring[j];
-      if (segmentDistance(p, a, b) <= NEAR_REGION) return true;
-      if (
-        a.y > p.y !== b.y > p.y &&
-        p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x
-      ) {
-        inside = !inside;
-      }
-    }
-  }
-  return inside;
-}
-
 /**
  * Nearest node that can be reached from `p` in a straight line without
- * leaving the region; -1 if there is none close enough
+ * leaving the region; -1 if there is none close enough. The hop must not
+ * cross an edge, and its middle must lie in the region (or next to it): a
+ * hop from a point outside onto a node on the edge crosses nothing, but
+ * would be a stitch across the gap to the next region.
  */
 function hopNode(graph: TravelGraph, p: Point): number {
   const order = graph.nodes
@@ -156,7 +129,16 @@ function hopNode(graph: TravelGraph, p: Point): number {
     const blocked = rings?.some((ring) =>
       ring.some((a, k) => crosses(p, node, a, ring[(k + 1) % ring.length])),
     );
-    if (!blocked) return i;
+    if (blocked) continue;
+    const middle = { x: (p.x + node.x) / 2, y: (p.y + node.y) / 2 };
+    if (
+      rings &&
+      !insideRings(middle, rings, graph.rule) &&
+      distanceToRings(middle, rings) > NEAR_REGION
+    ) {
+      continue;
+    }
+    return i;
   }
   return -1;
 }
@@ -275,10 +257,7 @@ export function connectBlocks(
     let reversed = false;
     let travel: Point[] | null = null;
 
-    const source =
-      position && (!graph.rings || nearRegion(position, graph.rings))
-        ? hopNode(graph, position)
-        : -1;
+    const source = position ? hopNode(graph, position) : -1;
     if (source >= 0) {
       const targets = new Set<number>();
       for (const block of remaining) {
@@ -292,11 +271,7 @@ export function connectBlocks(
         reversed = remaining[index].ends.find(
           (e) => e.node === found.node,
         )!.reversed;
-        // From the needle itself: the hop onto the graph stays inside
-        travel =
-          distance(position!, found.path[0]) > 0
-            ? [position!, ...found.path]
-            : found.path;
+        travel = found.path;
       }
     }
     if (!travel && position) {
