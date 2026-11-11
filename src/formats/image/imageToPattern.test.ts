@@ -209,6 +209,33 @@ describe("travel inside a region", () => {
       }
     }
   });
+  it("does not hop onto the shape from a point beside it", () => {
+    // Needle 2 mm left of a square (e.g. the end of the previous letter):
+    // reaching the square is a jump, not a travel run starting at its edge
+    const square = [
+      { x: 0, y: 0 },
+      { x: 200, y: 0 },
+      { x: 200, y: 200 },
+      { x: 0, y: 200 },
+    ];
+    const blocks = tatamiFill([square], {
+      angle: 45,
+      spacing: 25,
+      stitchLength: 30,
+      inset: 5,
+    });
+    const graph = createTravelGraph([square], 45, 15);
+    const [run] = connectBlocks(
+      blocks,
+      graph,
+      { x: -20, y: 100 },
+      {
+        travelStitch: 25,
+      },
+    );
+    const ends = blocks.flatMap((b) => [b[0], b[b.length - 1]]);
+    expect(ends).toContainEqual(run[0]);
+  });
 });
 
 describe("imageToPattern", () => {
