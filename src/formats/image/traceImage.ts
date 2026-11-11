@@ -92,12 +92,40 @@ function mixedPixels({ data, width, height }: ImageData): Uint8Array {
 }
 
 /**
+ * Byte offset of the first pixel past a blurred edge, walking from (x, y)
+ * in direction (dx, dy) over edge pixels of the same direction (`axis`);
+ * -1 if the edge is wider than MAX_EDGE_WIDTH or runs into the border or a
+ * transparent pixel
+ */
+function edgeSide(
+  { data, width, height }: ImageData,
+  mixed: Uint8Array,
+  x: number,
+  y: number,
+  dx: number,
+  dy: number,
+  axis: number,
+): number {
+  for (let k = 1; k <= MAX_EDGE_WIDTH; k++) {
+    const nx = x + k * dx;
+    const ny = y + k * dy;
+    if (nx < 0 || ny < 0 || nx >= width || ny >= height) return -1;
+    const n = ny * width + nx;
+    if (mixed[n] === axis) continue;
+    if (mixed[n] || data[n * 4 + 3] < 128) return -1;
+    return n * 4;
+  }
+  return -1;
+}
+
+/**
  * The image with every mixed edge pixel set to the color of the side of
  * the edge it is closer to: a gray seam along a straight black edge on
  * white would otherwise be traced as a strip of whatever palette color is
  * closest to gray (e.g. a light pink). Blurred edges several pixels wide
  * (an enlarged image) are followed to their solid colors on both sides; a
- * pixel right in the middle goes to the darker side.
+ * pixel right in the middle goes to the darker side. Pixels whose edge
+ * has no solid color on both sides keep their color.
  */
 export function snapMixedPixels(imageData: ImageData): ImageData {
   const { data: source, width, height } = imageData;
@@ -107,24 +135,12 @@ export function snapMixedPixels(imageData: ImageData): ImageData {
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const p = y * width + x;
-      if (!mixed[p]) continue;
-      const [dx, dy] = mixed[p] === MIXED_ACROSS_X ? [1, 0] : [0, 1];
-      // First pixel on each side that is no longer part of the edge
-      const sideOf = (sign: number) => {
-        let sx = x;
-        let sy = y;
-        for (let k = 0; k < MAX_EDGE_WIDTH; k++) {
-          const nx = sx + sign * dx;
-          const ny = sy + sign * dy;
-          if (nx < 0 || ny < 0 || nx >= width || ny >= height) break;
-          sx = nx;
-          sy = ny;
-          if (!mixed[sy * width + sx]) break;
-        }
-        return (sy * width + sx) * 4;
-      };
-      const a = sideOf(-1);
-      const b = sideOf(1);
+      const axis = mixed[p];
+      if (!axis) continue;
+      const [dx, dy] = axis === MIXED_ACROSS_X ? [1, 0] : [0, 1];
+      const a = edgeSide(imageData, mixed, x, y, -dx, -dy, axis);
+      const b = edgeSide(imageData, mixed, x, y, dx, dy, axis);
+      if (a < 0 || b < 0) continue;
       const i = p * 4;
       let t = 0;
       let length2 = 0;
