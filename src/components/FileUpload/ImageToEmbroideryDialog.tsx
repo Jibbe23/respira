@@ -29,6 +29,7 @@ import {
   type ImageToPatternOptions,
   type Repeats,
 } from "../../formats/image/imageToPattern";
+import { THREAD_WIDTH } from "../PatternCanvas/KonvaComponents";
 
 const MAX_COLORS = 12;
 const MIN_WIDTH_MM = 10;
@@ -89,7 +90,9 @@ function drawPattern(canvas: HTMLCanvasElement, pattern: PesPatternData) {
   const oy = (size - (maxY - minY) * scale) / 2 - minY * scale;
 
   context.clearRect(0, 0, size, size);
-  context.lineWidth = 1;
+  // As wide as the thread (at least a pixel), like the pattern preview
+  context.lineWidth = Math.max(1, THREAD_WIDTH * scale);
+  context.lineCap = "round";
   const { stitches, threads } = pattern;
   for (let i = 1; i < stitches.length; i++) {
     const [x, y, cmd, color] = stitches[i];

@@ -481,6 +481,31 @@ describe("imageToPattern", () => {
     expect(Math.max(...xs) - Math.min(...xs)).toBeLessThanOrEqual(600);
   });
 
+  it("fills areas with rows 0.35 mm apart", () => {
+    // 9 mm square: too small for an underlay, so only fill rows count
+    const image = makeImage(100, 100, () => RED);
+    const { stitches } = imageToPattern(image, {
+      colors: 1,
+      widthMm: 9,
+      removeBackground: false,
+      ...TATAMI,
+    })!;
+    // Fill rows run at 45 degrees: their offset across the rows, for the
+    // stitches in the middle of the square
+    const offsets = stitches
+      .filter((s) => Math.abs(s[0]) < 25 && Math.abs(s[1]) < 25)
+      .map((s) => (s[0] - s[1]) / Math.SQRT2)
+      .sort((a, b) => a - b);
+    const rows: number[] = [];
+    for (const o of offsets) {
+      if (rows.length === 0 || o - rows[rows.length - 1] > 1.5) rows.push(o);
+    }
+    const gaps = rows.slice(1).map((o, i) => o - rows[i]);
+    const mean = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+    expect(mean).toBeGreaterThan(3.2);
+    expect(mean).toBeLessThan(3.8);
+  });
+
   it("sews lines last, on top of the areas", () => {
     // Many thin black lines (more area than the red square) and a square
     const BLACK: Pixel = [0, 0, 0, 255];

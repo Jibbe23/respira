@@ -6,6 +6,13 @@ import type { MachineInfo } from "../../types/machine";
 import { MOVE } from "../../formats/import/constants";
 import { canvasColors } from "../../utils/cssVariables";
 
+/**
+ * Stitches are drawn as wide as the thread lies on the fabric (0.35 mm in
+ * pattern units of 0.1 mm), so the preview shows gaps where the fabric
+ * would show through, not between hairlines
+ */
+export const THREAD_WIDTH = 3.5;
+
 interface GridProps {
   gridSize: number;
   bounds: { minX: number; maxX: number; minY: number; maxY: number };
@@ -320,7 +327,7 @@ export const Stitches = memo(
             key={i}
             points={group.points}
             stroke={group.color}
-            strokeWidth={group.isJump ? 1.5 : 1.5}
+            strokeWidth={group.isJump ? 1.5 : THREAD_WIDTH}
             lineCap="round"
             lineJoin="round"
             dash={group.isJump ? [8, 4] : undefined}

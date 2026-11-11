@@ -176,4 +176,66 @@ describe("satinStitches", () => {
     ];
     expect(satinStitches([blob], null, OPTIONS)).toBeNull();
   });
+
+  it("leaves short, wide blobs to the tatami fill", () => {
+    // A bow lobe (6 x 4.4 mm) and the stubby tip of a shape (4 x 2.5 mm):
+    // a short center line fans out and leaves the ends bare
+    const lobe: Ring = Array.from({ length: 72 }, (_, i) => ({
+      x: 30 * Math.cos((2 * Math.PI * i) / 72),
+      y: 22 * Math.sin((2 * Math.PI * i) / 72),
+    }));
+    expect(satinStitches([lobe], null, OPTIONS)).toBeNull();
+    expect(satinStitches([rect(0, 0, 40, 25)], null, OPTIONS)).toBeNull();
+  });
+
+  it("keeps short thin lines such as closed eyes in satin", () => {
+    expect(satinStitches([rect(0, 0, 25, 8)], null, OPTIONS)).not.toBeNull();
+    // A bold i stem: 6 mm long, 1.8 mm wide
+    expect(satinStitches([rect(0, 0, 18, 60)], null, OPTIONS)).not.toBeNull();
+  });
+
+  it("keeps the peaks evenly spaced on the outside of curves", () => {
+    // An o with a 2 mm stroke around a 1 mm hole: on the outer edge the
+    // peaks would fan out to 1.5 times the spacing
+    const plan = planSatin([circle(0, 0, 30), circle(0, 0, 10)], OPTIONS);
+    expect(plan).not.toBeNull();
+    let widest = 0;
+    for (const s of plan!.strokes) {
+      // Peaks alternate: left at even samples, right at odd ones
+      const left = s.left.filter((_, i) => i % 2 === 0);
+      const right = s.right.filter((_, i) => i % 2 === 1);
+      for (const side of [left, right]) {
+        for (let i = 1; i < side.length; i++) {
+          widest = Math.max(
+            widest,
+            Math.hypot(side[i].x - side[i - 1].x, side[i].y - side[i - 1].y),
+          );
+        }
+      }
+    }
+    // Some slack: the edge follows the pixel raster of the distance
+    // transform (before: 1.9 times the spacing)
+    expect(widest).toBeLessThanOrEqual(OPTIONS.spacing * 1.3);
+  });
+
+  it("spreads the needle points on the inside of tight curves", () => {
+    // An o with a 1.2 mm stroke around a 0.8 mm hole: inside, the peaks
+    // crowd together; every other close one is pulled in (short stitch)
+    const plan = planSatin([circle(0, 0, 16), circle(0, 0, 4)], OPTIONS);
+    expect(plan).not.toBeNull();
+    let closest = Infinity;
+    for (const s of plan!.strokes) {
+      const left = s.left.filter((_, i) => i % 2 === 0);
+      const right = s.right.filter((_, i) => i % 2 === 1);
+      for (const side of [left, right]) {
+        for (let i = 1; i < side.length; i++) {
+          closest = Math.min(
+            closest,
+            Math.hypot(side[i].x - side[i - 1].x, side[i].y - side[i - 1].y),
+          );
+        }
+      }
+    }
+    expect(closest).toBeGreaterThanOrEqual(1);
+  });
 });
