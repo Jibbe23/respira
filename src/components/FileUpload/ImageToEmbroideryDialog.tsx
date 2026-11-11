@@ -321,7 +321,7 @@ export function ImageToEmbroideryDialog({
                 aria-label="Fill type"
                 className={SELECT_CLASS}
               >
-                <option value="tatami">Fill (smooth areas)</option>
+                <option value="tatami">Fill (smooth areas, satin lines)</option>
                 <option value="cross">Cross stitch</option>
               </select>
             </label>
@@ -340,8 +340,11 @@ export function ImageToEmbroideryDialog({
                     <option value="dense">Dense</option>
                   </select>
                 </label>
-                <label className="flex items-center gap-2">
-                  <span>Outline</span>
+                <label
+                  className="flex items-center gap-2"
+                  title="Running stitch around filled areas; satin lines need none"
+                >
+                  <span>Outline (areas)</span>
                   <RepeatsSelect
                     value={outlineRepeats}
                     onChange={setOutlineRepeats}

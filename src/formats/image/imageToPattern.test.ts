@@ -383,6 +383,25 @@ describe("imageToPattern", () => {
     },
   );
 
+  it("sews thin strokes in satin across the stroke", () => {
+    // A 1.5 mm wide line (5 px at 0.3 mm per px)
+    const BLACK: Pixel = [0, 0, 0, 255];
+    const line = makeImage(200, 20, (_x, y) =>
+      y >= 8 && y < 13 ? BLACK : WHITE,
+    );
+    const { stitches } = imageToPattern(line, {
+      colors: 1,
+      widthMm: 60,
+      removeBackground: true,
+      ...TATAMI,
+    })!;
+    // Satin: most stitches go across the line, edge to edge
+    const across = stitches.filter(
+      (s, i) => i > 0 && Math.abs(s[1] - stitches[i - 1][1]) > 12,
+    );
+    expect(across.length).toBeGreaterThan(stitches.length * 0.6);
+  });
+
   it("returns null when only the background is left", () => {
     const blank = makeImage(40, 40, () => WHITE);
     expect(
