@@ -55,6 +55,65 @@ export function ringArea(ring: Ring): number {
   return Math.abs(sum) / 2;
 }
 
+/** Signed area of a ring (shoelace): the sign gives its direction */
+function signedArea(ring: Ring): number {
+  let sum = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % ring.length];
+    sum += a.x * b.y - b.x * a.y;
+  }
+  return sum / 2;
+}
+
+/**
+ * Grow a region by `distance` in all directions: the outer ring moves out,
+ * holes get smaller (holes too small to keep are dropped). Each vertex moves
+ * along the bisector of its two edges.
+ */
+export function offsetRings(rings: Ring[], distance: number): Ring[] {
+  const result: Ring[] = [];
+  rings.forEach((ring, index) => {
+    const area = signedArea(ring);
+    if (ring.length < 3 || area === 0) return;
+    const isHole = index > 0;
+    if (isHole && Math.abs(area) < (4 * distance) ** 2) return;
+    // Normal pointing away from the filled area: out of the outer ring,
+    // into a hole
+    const side = (area > 0 ? 1 : -1) * (isHole ? -1 : 1);
+    const normal = (a: Point, b: Point) => {
+      const length = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      return {
+        x: (side * (b.y - a.y)) / length,
+        y: (side * -(b.x - a.x)) / length,
+      };
+    };
+    const moved = ring.map((p, i) => {
+      const prev = ring[(i - 1 + ring.length) % ring.length];
+      const next = ring[(i + 1) % ring.length];
+      const n1 = normal(prev, p);
+      const n2 = normal(p, next);
+      let mx = n1.x + n2.x;
+      let my = n1.y + n2.y;
+      const length = Math.hypot(mx, my);
+      if (length < 1e-6) {
+        mx = n1.x;
+        my = n1.y;
+      } else {
+        mx /= length;
+        my /= length;
+      }
+      // Corners move farther to keep both edges at the distance, at most 2x
+      const scale = distance / Math.max(0.5, mx * n1.x + my * n1.y);
+      return { x: p.x + mx * scale, y: p.y + my * scale };
+    });
+    // A hole that turned inside out is gone
+    if (isHole && Math.sign(signedArea(moved)) !== Math.sign(area)) return;
+    result.push(moved);
+  });
+  return result;
+}
+
 /** Area of a region: outer ring minus holes */
 export function regionArea(rings: Ring[]): number {
   if (rings.length === 0) return 0;

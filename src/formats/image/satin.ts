@@ -472,17 +472,21 @@ interface SatinStroke {
   right: Point[];
 }
 
+/** What is needed to sew a region in satin (see planSatin) */
+export interface SatinPlan {
+  strokes: SatinStroke[];
+  freeEnd: Set<number>; // nodes at the free end of a stroke
+}
+
 /**
- * Satin stitches for a narrow region: one run (underlay and satin) per
- * connected part, the first starting near `start`; null if the region is
- * too wide for satin or has no usable center line (then it gets a tatami
- * fill)
+ * Center lines and satin edges of a narrow region (the expensive part);
+ * null if the region is too wide for satin or has no usable center line
+ * (then it gets a tatami fill)
  */
-export function satinStitches(
+export function planSatin(
   rings: Ring[],
-  start: Point | null,
   options: SatinOptions,
-): Point[][] | null {
+): SatinPlan | null {
   const raster = rasterize(rings);
   if (!raster) return null;
   const distance = distanceTransform(raster);
@@ -570,6 +574,22 @@ export function satinStitches(
   if (2 * typical > options.maxWidth) return null;
   if (2 * halfWidths[halfWidths.length - 1] > maxStitch) return null;
 
+  const freeEnd = new Set<number>();
+  degree.forEach((d, id) => {
+    if (d === 1) freeEnd.add(id);
+  });
+  return { strokes, freeEnd };
+}
+
+/**
+ * Satin stitches for a planned region: one run (underlay and satin) per
+ * connected part, the first starting near `start`
+ */
+export function sewSatin(
+  { strokes, freeEnd }: SatinPlan,
+  start: Point | null,
+  options: SatinOptions,
+): Point[][] {
   const byNode = new Map<number, SatinStroke[]>();
   for (const s of strokes) {
     byNode.set(s.a, [...(byNode.get(s.a) ?? []), s]);
@@ -589,7 +609,7 @@ export function satinStitches(
       ] as const) {
         const d =
           (from ? Math.hypot(p.x - from.x, p.y - from.y) : 0) +
-          (degree[id] === 1 ? 0 : 20);
+          (freeEnd.has(id) ? 0 : 20);
         if (d < best) {
           best = d;
           node = id;
@@ -638,5 +658,17 @@ export function satinStitches(
     runs.push(run);
     position = run[run.length - 1];
   }
+  return runs;
+}
+
+/** planSatin and sewSatin in one go */
+export function satinStitches(
+  rings: Ring[],
+  start: Point | null,
+  options: SatinOptions,
+): Point[][] | null {
+  const plan = planSatin(rings, options);
+  if (!plan) return null;
+  const runs = sewSatin(plan, start, options);
   return runs.length > 0 ? runs : null;
 }

@@ -4,8 +4,9 @@
 
 /**
  * Longest side the image is reduced to before tracing (speed vs. detail):
- * 1000 px over a 100 mm hoop is the 0.1 mm stitch resolution, so thin lines
- * and dots survive (at 400 px contour lines blurred away)
+ * a bit finer than the 0.1 mm stitch resolution over a 100 mm hoop
+ * (1000 px), so thin lines and dots survive scaling (at 400 px contour lines
+ * blurred away)
  */
 const TRACE_SIZE = 1200;
 /** Size used for SVGs without width/height */

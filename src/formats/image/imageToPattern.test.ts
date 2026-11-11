@@ -7,6 +7,7 @@ import {
 import { crossStitchRuns } from "./crossStitch";
 import {
   tatamiFill,
+  offsetRings,
   runAroundRing,
   regionArea,
   repeatClosedRun,
@@ -400,7 +401,18 @@ describe("imageToPattern", () => {
     const across = stitches.filter(
       (s, i) => i > 0 && Math.abs(s[1] - stitches[i - 1][1]) > 12,
     );
-    expect(across.length).toBeGreaterThan(stitches.length * 0.6);
+    expect(across.length).toBeGreaterThan(stitches.length * 0.5);
+    // Then an outline: running stitches along both edges (y = ±7.5)
+    for (const edge of [-7.5, 7.5]) {
+      const along = stitches.filter(
+        (s, i) =>
+          i > 0 &&
+          Math.abs(s[1] - edge) < 1 &&
+          Math.abs(stitches[i - 1][1] - edge) < 1 &&
+          Math.abs(s[0] - stitches[i - 1][0]) > 15,
+      );
+      expect(along.length).toBeGreaterThan(10);
+    }
   });
 
   it("fills areas a little past their edge against gaps", () => {
@@ -446,6 +458,63 @@ describe("imageToPattern", () => {
         ...TATAMI,
       }),
     ).toBeNull();
+  });
+});
+
+describe("offsetRings", () => {
+  const sq = square(100)[0];
+  const hole = [
+    { x: 40, y: 40 },
+    { x: 40, y: 60 },
+    { x: 60, y: 60 },
+    { x: 60, y: 40 },
+  ];
+
+  it("grows the area on all sides and shrinks holes", () => {
+    for (const outer of [sq, [...sq].reverse()]) {
+      const [grown, shrunk] = offsetRings([outer, hole], 3);
+      const xs = grown.map((p) => p.x);
+      const ys = grown.map((p) => p.y);
+      expect([Math.min(...xs), Math.max(...xs)]).toEqual([-3, 103]);
+      expect([Math.min(...ys), Math.max(...ys)]).toEqual([-3, 103]);
+      expect(regionArea([shrunk])).toBeCloseTo(14 * 14);
+    }
+  });
+
+  it("covers edges parallel to the fill rows too", () => {
+    // Diamond: two of its edges run along the 45 degree rows
+    const diamond = [
+      { x: 50, y: 0 },
+      { x: 100, y: 50 },
+      { x: 50, y: 100 },
+      { x: 0, y: 50 },
+    ];
+    const points = tatamiFill(offsetRings([diamond], 3), {
+      angle: 45,
+      spacing: 4,
+      stitchLength: 40,
+    }).flat();
+    // Reaches past every edge (without the offset two edges stay short)
+    for (const [sx, sy] of [
+      [1, 1],
+      [1, -1],
+      [-1, 1],
+      [-1, -1],
+    ]) {
+      expect(points.some((p) => sx * (p.x - 50) + sy * (p.y - 50) > 50.2)).toBe(
+        true,
+      );
+    }
+  });
+
+  it("drops holes too small to keep", () => {
+    const tiny = [
+      { x: 50, y: 50 },
+      { x: 50, y: 54 },
+      { x: 54, y: 54 },
+      { x: 54, y: 50 },
+    ];
+    expect(offsetRings([sq, tiny], 3)).toHaveLength(1);
   });
 });
 
@@ -586,6 +655,8 @@ describe("quantizePalette", () => {
       palette.some((c) => c.every((v, k) => Math.abs(v - target[k]) < 8));
     expect(near([241, 232, 216])).toBe(true);
     expect(near([242, 218, 203])).toBe(true);
+    // The 1 px lines keep their color, their gray edges get none
+    expect(near([0, 0, 0])).toBe(true);
     expect(near([128, 128, 128])).toBe(false);
   });
 });

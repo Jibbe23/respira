@@ -22,6 +22,7 @@ import {
 } from "./crossStitch";
 import {
   tatamiFill,
+  offsetRings,
   runAroundRing,
   repeatClosedRun,
   regionArea,
@@ -37,7 +38,7 @@ import {
   type TracedImage,
 } from "./traceImage";
 import { createTravelGraph, connectBlocks } from "./travel";
-import { satinStitches } from "./satin";
+import { planSatin, sewSatin, type SatinPlan } from "./satin";
 
 export type FillDensity = "normal" | "dense";
 export type FillType = "tatami" | "cross";
@@ -86,8 +87,11 @@ const TRAVEL_STITCH_LENGTH = 25;
 /** Row spacing of the travel graph (coarser than the fill, enough to route) */
 const TRAVEL_GRAPH_SPACING = 15;
 
-/** Room kept for lock stitches when fitting the height (0.5 mm) */
-const FIT_MARGIN = 5;
+/**
+ * Room kept when fitting the height (1 mm): fill and satin reach past the
+ * edges on both sides, lock stitches a little more
+ */
+const FIT_MARGIN = 10;
 
 const brotherColors = getAllBrotherColors();
 
@@ -396,31 +400,34 @@ const satinOptions = (options: ImageToPatternOptions) => ({
 });
 
 /**
- * Regions sewn in satin, and the groups in sewing order: areas first, lines
- * (groups mostly in satin, e.g. black contours and lettering) last, so they
- * lie on top of the edges of the areas
+ * Sewing order: threads that are mostly lines sewn in satin (lettering,
+ * contour lines) come last, so they lie on top of the edges of the areas;
+ * the other threads keep their order (largest first). Decided per thread,
+ * not per region: a few narrow strips of an area color would otherwise
+ * need a second block and an extra thread change.
  */
-function planSatin(
+function orderForSewing(
   groups: ThreadGroup<Ring[]>[],
   options: ImageToPatternOptions,
-): { groups: ThreadGroup<Ring[]>[]; satinRegions: Set<Ring[]> } {
-  const satinRegions = new Set<Ring[]>();
-  const lineShare = new Map<ThreadGroup<Ring[]>, number>();
+): { groups: ThreadGroup<Ring[]>[]; satin: Map<Ring[], SatinPlan> } {
+  const satin = new Map<Ring[], SatinPlan>();
+  const isLines = new Set<ThreadGroup<Ring[]>>();
   for (const group of groups) {
     let satinArea = 0;
     for (const rings of group.items) {
-      if (satinStitches(rings, null, satinOptions(options))) {
-        satinRegions.add(rings);
-        satinArea += regionArea(rings);
-      }
+      const plan = planSatin(rings, satinOptions(options));
+      if (!plan) continue;
+      satin.set(rings, plan);
+      satinArea += regionArea(rings);
     }
-    lineShare.set(group, satinArea / Math.max(1, group.area));
+    if (satinArea > group.area / 2) isLines.add(group);
   }
-  const isLines = (g: ThreadGroup<Ring[]>) => lineShare.get(g)! > 0.5;
   return {
-    // Stable: areas keep their order (largest first), then lines
-    groups: [...groups.filter((g) => !isLines(g)), ...groups.filter(isLines)],
-    satinRegions,
+    groups: [
+      ...groups.filter((g) => !isLines.has(g)),
+      ...groups.filter((g) => isLines.has(g)),
+    ],
+    satin,
   };
 }
 
@@ -428,7 +435,7 @@ function planSatin(
 function regionsToStitches(
   groups: ThreadGroup<Ring[]>[],
   options: ImageToPatternOptions,
-  satinRegions: Set<Ring[]>,
+  satin: Map<Ring[], SatinPlan>,
 ): number[][] {
   const writer = createStitchWriter(MAX_TRAVEL_STITCH);
   groups.forEach((group, colorIndex) => {
@@ -453,18 +460,53 @@ function regionsToStitches(
       }
       const [rings] = remaining.splice(index, 1);
 
-      // Narrow shapes: satin across the stroke instead of a tatami fill
-      const satin = satinRegions.has(rings)
-        ? satinStitches(rings, writer.position, satinOptions(options))
-        : null;
-      if (satin) {
-        satin.forEach(sew);
+      // Outline along the edge
+      const sewOutline = (
+        sewRuns: (runs: Point[][]) => void,
+        repeats: Repeats,
+      ) => {
+        for (const ring of rings) {
+          const outline = runAroundRing(
+            ring,
+            OUTLINE_STITCH_LENGTH,
+            writer.position ?? undefined,
+          );
+          sewRuns([repeatClosedRun(outline, repeats)]);
+        }
+      };
+
+      // Narrow shapes: satin across the stroke instead of a tatami fill.
+      // The outline goes first (edge run): it makes the edge crisp, and the
+      // satin covers the stitches between outer edge and holes (an outline
+      // on top would need travel across the finished letter)
+      const plan = satin.get(rings);
+      if (plan) {
+        // Travel inside the letter (covered by the satin), not across it
+        const graph = createTravelGraph(
+          rings,
+          FILL_ANGLE,
+          TRAVEL_GRAPH_SPACING,
+        );
+        const sewInside = (runs: Point[][]) =>
+          connectBlocks(runs, graph, writer.position, {
+            travelStitch: TRAVEL_STITCH_LENGTH,
+            // A satin run is underlay out, satin back: never reversed
+            allowReverse: false,
+          }).forEach(sew);
+        sewOutline(sewInside, 1);
+        sewInside(sewSatin(plan, writer.position, satinOptions(options)));
         continue;
       }
 
       // Underlay, fill and outline as one thread: travel inside the region
       // instead of jumping (and trimming) between blocks
-      const graph = createTravelGraph(rings, FILL_ANGLE, TRAVEL_GRAPH_SPACING);
+      // The fill reaches past the edge on all sides (pull compensation)
+      const fillRings = offsetRings(rings, FILL_PULL_COMPENSATION);
+      const graph = createTravelGraph(
+        fillRings,
+        FILL_ANGLE,
+        TRAVEL_GRAPH_SPACING,
+      );
       const sewBlocks = (blocks: Point[][]) =>
         connectBlocks(blocks, graph, writer.position, {
           travelStitch: TRAVEL_STITCH_LENGTH,
@@ -474,21 +516,13 @@ function regionsToStitches(
         sewBlocks(tatamiFill(rings, { angle: FILL_ANGLE + 90, ...UNDERLAY }));
       }
       sewBlocks(
-        tatamiFill(rings, {
+        tatamiFill(fillRings, {
           angle: FILL_ANGLE,
-          inset: -FILL_PULL_COMPENSATION,
           spacing: ROW_SPACING[options.density],
           stitchLength: FILL_STITCH_LENGTH,
         }),
       );
-      for (const ring of rings) {
-        const outline = runAroundRing(
-          ring,
-          OUTLINE_STITCH_LENGTH,
-          writer.position ?? undefined,
-        );
-        sewBlocks([repeatClosedRun(outline, options.outlineRepeats)]);
-      }
+      sewOutline(sewBlocks, options.outlineRepeats);
     }
   });
   return writer.stitches;
@@ -576,12 +610,12 @@ export function imageToPattern(
     stitches = cellsToStitches(cellGroups, options);
   } else {
     const regions = traceImage(image, traced.palette, traced.backgroundIndex);
-    const plan = planSatin(
+    const order = orderForSewing(
       groupRegionsByThread(regions, traced.threads, options),
       options,
     );
-    groups = plan.groups;
-    stitches = regionsToStitches(plan.groups, options, plan.satinRegions);
+    groups = order.groups;
+    stitches = regionsToStitches(order.groups, options, order.satin);
   }
   stitches = roundStitches(stitches);
   if (stitches.length < 2) return null;

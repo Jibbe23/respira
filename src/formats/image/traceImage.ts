@@ -46,47 +46,51 @@ interface TracePath {
 const BACKGROUND_BORDER_SHARE = 0.6;
 /** k-means rounds for the palette */
 const PALETTE_ITERATIONS = 10;
-/** A pixel counts as flat when its neighbours differ by at most this (RGB sum) */
-const FLAT_DIFFERENCE = 30;
-/** Below this share of flat pixels (photos, noise) all pixels count */
-const MIN_FLAT_SHARE = 0.2;
+/** Neighbours closer than this (RGB distance) are not an edge to mix across */
+const MIN_EDGE_CONTRAST = 40;
+
+/**
+ * Pixels whose color is a mix of their two opposite neighbours (left and
+ * right, or above and below): anti-aliased edges, and the mixed colors that
+ * scaling an image adds along every edge
+ */
+function mixedPixels({ data, width, height }: ImageData): Uint8Array {
+  const mixed = new Uint8Array(width * height);
+  const isMix = (i: number, a: number, b: number) => {
+    if (data[a + 3] < 128 || data[b + 3] < 128) return false;
+    const d = [0, 1, 2].map((k) => data[b + k] - data[a + k]);
+    const length2 = d[0] ** 2 + d[1] ** 2 + d[2] ** 2;
+    if (length2 < MIN_EDGE_CONTRAST ** 2) return false;
+    const p = [0, 1, 2].map((k) => data[i + k] - data[a + k]);
+    const t = (p[0] * d[0] + p[1] * d[1] + p[2] * d[2]) / length2;
+    if (t < 0.1 || t > 0.9) return false;
+    const off = Math.hypot(...[0, 1, 2].map((k) => p[k] - t * d[k]));
+    return off < Math.max(12, 0.25 * Math.sqrt(length2));
+  };
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const i = (y * width + x) * 4;
+      if (data[i + 3] < 128) continue;
+      if (isMix(i, i - 4, i + 4) || isMix(i, i - width * 4, i + width * 4)) {
+        mixed[y * width + x] = 1;
+      }
+    }
+  }
+  return mixed;
+}
 
 /**
  * Palette of `colors` colors for the opaque pixels: k-means on a 5-bit color
  * histogram, seeded with frequent colors that are far apart from each other
- * (so anti-aliased edge pixels do not get a color of their own). Only flat
- * pixels (neighbours of the same color) are counted: scaling an image mixes
- * colors along every edge, and a thin black line on white would otherwise
- * make a gray that takes the place of a real color. A transparent entry is
- * added when the image has transparent pixels.
+ * (so anti-aliased edge pixels do not get a color of their own). Pixels that
+ * mix their neighbours' colors are not counted: scaling an image mixes colors
+ * along every edge, and the gray along black lines on white would otherwise
+ * take the place of a real color. Thin lines still count with their own
+ * color. A transparent entry is added when the image has transparent pixels.
  */
 export function quantizePalette(imageData: ImageData, colors: number): RGBA[] {
-  const { data, width, height } = imageData;
-  const differs = (i: number, j: number) =>
-    Math.abs(data[i] - data[j]) +
-      Math.abs(data[i + 1] - data[j + 1]) +
-      Math.abs(data[i + 2] - data[j + 2]) >
-    FLAT_DIFFERENCE;
-  const isFlat = (i: number) => {
-    const p = i / 4;
-    const x = p % width;
-    const y = (p - x) / width;
-    return (
-      (x === 0 || !differs(i, i - 4)) &&
-      (x === width - 1 || !differs(i, i + 4)) &&
-      (y === 0 || !differs(i, i - width * 4)) &&
-      (y === height - 1 || !differs(i, i + width * 4))
-    );
-  };
-  let opaque = 0;
-  let flat = 0;
-  for (let i = 0; i < data.length; i += 4) {
-    if (data[i + 3] < 128) continue;
-    opaque++;
-    if (isFlat(i)) flat++;
-  }
-  const onlyFlat = flat >= opaque * MIN_FLAT_SHARE;
-
+  const { data } = imageData;
+  const mixed = mixedPixels(imageData);
   const bins = new Map<
     number,
     { n: number; r: number; g: number; b: number }
@@ -97,7 +101,7 @@ export function quantizePalette(imageData: ImageData, colors: number): RGBA[] {
       transparent = true;
       continue;
     }
-    if (onlyFlat && !isFlat(i)) continue;
+    if (mixed[i / 4]) continue;
     const key =
       ((data[i] >> 3) << 10) | ((data[i + 1] >> 3) << 5) | (data[i + 2] >> 3);
     const bin = bins.get(key) ?? { n: 0, r: 0, g: 0, b: 0 };
