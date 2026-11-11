@@ -6,7 +6,7 @@ import {
   encodeStitchesToPen,
   LOCK_STITCH_JUMP_SIZE,
 } from "./encoder";
-import { decodeAllPenStitches } from "./decoder";
+import { decodeAllPenStitches, decodePenData } from "./decoder";
 import { STITCH, MOVE, TRIM, END } from "../import/constants";
 
 // PEN format flag constants for testing
@@ -672,5 +672,125 @@ describe("encodeStitchesToPen", () => {
     expect(decoded[10].x).toBe(30);
     expect(decoded[10].y).toBe(20);
     expect(decoded[10].isDataEnd).toBe(true);
+  });
+});
+
+describe("encodeStitchesToPen with stopAfterTrim", () => {
+  // Two pieces of one color, 20 mm apart: a long jump (cut) between them
+  const twoPieces = [
+    [0, 0, STITCH, 0],
+    [10, 0, STITCH, 0],
+    [210, 0, MOVE, 0],
+    [220, 0, STITCH, 0],
+    [230, 0, STITCH | END, 0],
+  ];
+
+  it("pauses at a long jump like a color change, cutting once", () => {
+    const result = encodeStitchesToPen(twoPieces, { stopAfterTrim: true });
+    const decoded = decodeAllPenStitches(result.penBytes);
+
+    expect(result.trimStops).toHaveLength(1);
+    const stop = decoded[result.trimStops[0]];
+    expect(stop.isColorEnd).toBe(true);
+    expect(stop.isCut).toBe(true);
+    expect([stop.x, stop.y]).toEqual([10, 0]);
+
+    // Then a jump to the next piece without a second cut
+    const jump = decoded[result.trimStops[0] + 1];
+    expect(jump.isFeed).toBe(true);
+    expect(jump.isCut).toBe(false);
+    expect([jump.x, jump.y]).toEqual([210, 0]);
+    expect(decoded.filter((s) => s.isCut)).toHaveLength(1);
+  });
+
+  it("does not add stops when off", () => {
+    const result = encodeStitchesToPen(twoPieces);
+    const decoded = decodeAllPenStitches(result.penBytes);
+
+    expect(result.trimStops).toEqual([]);
+    expect(decoded.some((s) => s.isColorEnd)).toBe(false);
+  });
+
+  it("pauses at a cut from the file, but not twice before the next jump", () => {
+    const stitches = [
+      [0, 0, STITCH, 0],
+      [10, 0, STITCH | TRIM, 0],
+      [210, 0, MOVE, 0],
+      [220, 0, STITCH, 0],
+      [230, 0, STITCH | END, 0],
+    ];
+    const result = encodeStitchesToPen(stitches, { stopAfterTrim: true });
+    const decoded = decodeAllPenStitches(result.penBytes);
+
+    expect(result.trimStops).toHaveLength(1);
+    const stop = result.trimStops[0];
+    expect(decoded[stop].isColorEnd).toBe(true);
+    expect(decoded[stop].isCut).toBe(true);
+    expect(decoded.filter((s) => s.isColorEnd)).toHaveLength(1);
+    // Already cut: straight on to the jump, no lock stitches or second cut
+    expect(decoded[stop + 1].isFeed).toBe(true);
+    expect([decoded[stop + 1].x, decoded[stop + 1].y]).toEqual([210, 0]);
+    expect(decoded.filter((s) => s.isCut)).toHaveLength(1);
+  });
+
+  it("pauses at every long jump, also right after one", () => {
+    const stitches = [
+      [0, 0, STITCH, 0],
+      [10, 0, STITCH, 0],
+      [210, 0, MOVE, 0],
+      [410, 0, MOVE, 0],
+      [420, 0, STITCH, 0],
+      [430, 0, STITCH | END, 0],
+    ];
+    const result = encodeStitchesToPen(stitches, { stopAfterTrim: true });
+    const decoded = decodeAllPenStitches(result.penBytes);
+
+    // The lock stitches at 210 are sewn, so the second jump cuts again
+    expect(result.trimStops).toHaveLength(2);
+    for (const stop of result.trimStops) {
+      expect(decoded[stop].isColorEnd && decoded[stop].isCut).toBe(true);
+    }
+  });
+
+  it("does not pause right before a color change", () => {
+    const stitches = [
+      [0, 0, STITCH, 0],
+      [10, 0, STITCH, 0],
+      [210, 0, MOVE, 0],
+      [220, 0, STITCH, 0],
+      [230, 0, STITCH, 1],
+      [240, 0, STITCH | END, 1],
+    ];
+    const result = encodeStitchesToPen(stitches, { stopAfterTrim: true });
+    const decoded = decodeAllPenStitches(result.penBytes);
+
+    expect(result.trimStops).toEqual([]);
+    // The jump cuts as without the option
+    expect(decoded.some((s) => s.isFeed && s.isCut)).toBe(true);
+  });
+
+  it("keeps real color changes and their color blocks", () => {
+    const stitches = [
+      [0, 0, STITCH, 0],
+      [10, 0, STITCH, 0],
+      [210, 0, MOVE, 0],
+      [220, 0, STITCH, 0],
+      [230, 0, STITCH, 0],
+      [240, 0, STITCH, 1],
+      [250, 0, STITCH | END, 1],
+    ];
+    const result = encodeStitchesToPen(stitches, { stopAfterTrim: true });
+    const decoded = decodePenData(
+      new Uint8Array(result.penBytes),
+      result.trimStops,
+    );
+
+    expect(decoded.stitches.filter((s) => s.isColorEnd)).toHaveLength(2);
+    expect(decoded.trimStops).toEqual(result.trimStops);
+    // The pause after the cut does not split the first color
+    expect(decoded.colorBlocks.map((b) => b.colorIndex)).toEqual([0, 1]);
+    expect(decoded.colorBlocks[0].endStitchIndex).toBeGreaterThan(
+      result.trimStops[0],
+    );
   });
 });

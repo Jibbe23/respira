@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   calculateColorBlocks,
+  classifyMachineStop,
   findCurrentBlockIndex,
 } from "./colorBlockHelpers";
+import type { ColorBlock } from "../components/ProgressMonitor/types";
 import type { PesPatternData } from "../formats/import/client";
 
 describe("colorBlockHelpers", () => {
@@ -236,6 +238,59 @@ describe("colorBlockHelpers", () => {
       expect(findCurrentBlockIndex(singleBlock, 50)).toBe(0);
       expect(findCurrentBlockIndex(singleBlock, 99)).toBe(0);
       expect(findCurrentBlockIndex(singleBlock, 100)).toBe(-1);
+    });
+  });
+
+  describe("classifyMachineStop", () => {
+    const block = (colorIndex: number, start: number, end: number) =>
+      ({
+        colorIndex,
+        threadHex: "#000000",
+        startStitch: start,
+        endStitch: end,
+        stitchCount: end - start,
+        threadCatalogNumber: null,
+        threadBrand: null,
+        threadDescription: null,
+        threadChart: null,
+      }) satisfies ColorBlock;
+    const blocks = [block(0, 0, 100), block(1, 101, 200), block(2, 201, 300)];
+
+    it("names the next thread at a color change", () => {
+      expect(classifyMachineStop(blocks, 100, [50])).toEqual({
+        kind: "color",
+        nextBlock: blocks[1],
+      });
+      expect(classifyMachineStop(blocks, 202, [50])).toEqual({
+        kind: "color",
+        nextBlock: blocks[2],
+      });
+    });
+
+    it("takes the stop reached, not the nearest one ahead", () => {
+      // Paused at the cut at 100, a color change follows at 110
+      const close = [block(0, 0, 110), block(1, 111, 200)];
+      expect(classifyMachineStop(close, 106, [100])).toEqual({ kind: "trim" });
+      expect(classifyMachineStop(close, 110, [100])).toEqual({
+        kind: "color",
+        nextBlock: close[1],
+      });
+    });
+
+    it("recognises a pause after a cut", () => {
+      expect(classifyMachineStop(blocks, 51, [50, 150])).toEqual({
+        kind: "trim",
+      });
+      expect(classifyMachineStop(blocks, 150, [50, 150])).toEqual({
+        kind: "trim",
+      });
+    });
+
+    it("treats a stop as a color change without known cuts", () => {
+      expect(classifyMachineStop(blocks, 102)).toEqual({
+        kind: "color",
+        nextBlock: blocks[1],
+      });
     });
   });
 });

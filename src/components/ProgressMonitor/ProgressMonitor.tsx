@@ -14,6 +14,7 @@ import { MachineStatus } from "../../types/machine";
 import { calculatePatternTime } from "../../utils/timeCalculation";
 import {
   calculateColorBlocks,
+  classifyMachineStop,
   findCurrentBlockIndex,
 } from "../../utils/colorBlockHelpers";
 import {
@@ -29,6 +30,7 @@ import { ProgressSection } from "./ProgressSection";
 import { ColorBlockList } from "./ColorBlockList";
 import { ProgressActions } from "./ProgressActions";
 import { StitchStepControl } from "./StitchStepControl";
+import { StopNotice } from "./StopNotice";
 
 export function ProgressMonitor() {
   // Machine store
@@ -137,6 +139,17 @@ export function ProgressMonitor() {
         {/* Progress Bar */}
         {sewingProgress && (
           <ProgressSection progressPercent={progressPercent} />
+        )}
+
+        {/* Why the machine waits: thread change or pause after a cut */}
+        {machineStatus === MachineStatus.COLOR_CHANGE_WAIT && (
+          <StopNotice
+            stop={classifyMachineStop(
+              colorBlocks,
+              currentStitch,
+              displayPattern?.penStitches.trimStops,
+            )}
+          />
         )}
 
         {/* Color Blocks */}

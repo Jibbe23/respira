@@ -149,6 +149,8 @@ function App() {
           originalPesData.bounds,
         );
 
+        // Uploads since the stops after cuts always cache their data, so
+        // this is an older upload without such stops
         const penResult = encodeStitchesToPen(rotatedStitches);
         const penData = new Uint8Array(penResult.penBytes);
         const decoded = decodePenData(penData);

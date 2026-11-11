@@ -101,9 +101,15 @@ export function decodeAllPenStitches(
  * - Pattern bounds
  *
  * @param data PEN format byte array
+ * @param trimStops Stops added by the encoder's `stopAfterTrim` (they are
+ *   not color changes)
  * @returns Complete decoded pattern data
  */
-export function decodePenData(data: Uint8Array): DecodedPenData {
+export function decodePenData(
+  data: Uint8Array,
+  trimStops: readonly number[] = [],
+): DecodedPenData {
+  const isTrimStop = new Set(trimStops);
   const stitches = decodeAllPenStitches(data);
   const colorBlocks: PenColorBlock[] = [];
 
@@ -127,7 +133,7 @@ export function decodePenData(data: Uint8Array): DecodedPenData {
     }
 
     // Check for color change or data end
-    if (stitch.isColorEnd) {
+    if (stitch.isColorEnd && !isTrimStop.has(i)) {
       colorBlocks.push({
         startStitchIndex: currentColorStart,
         endStitchIndex: i,
@@ -157,6 +163,7 @@ export function decodePenData(data: Uint8Array): DecodedPenData {
   return {
     stitches,
     colorBlocks,
+    trimStops: [...trimStops],
     bounds: {
       minX: minX === Infinity ? 0 : minX,
       maxX: maxX === -Infinity ? 0 : maxX,
