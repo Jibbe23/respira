@@ -37,6 +37,7 @@ import {
   type TracedImage,
 } from "./traceImage";
 import { createTravelGraph, connectBlocks } from "./travel";
+import { satinStitches } from "./satin";
 
 export type FillDensity = "normal" | "dense";
 export type FillType = "tatami" | "cross";
@@ -57,6 +58,9 @@ export interface ImageToPatternOptions {
 
 /** Stitch parameters (0.1 mm units) */
 const ROW_SPACING: Record<FillDensity, number> = { normal: 4.5, dense: 3.5 };
+/** Satin for strokes up to 5 mm wide (lettering, contour lines) */
+const SATIN = { pullCompensation: 2, underlayStitch: 20, maxWidth: 50 };
+const SATIN_SPACING: Record<FillDensity, number> = { normal: 4, dense: 3 };
 const FILL_ANGLE = 45;
 const FILL_STITCH_LENGTH = 40;
 const UNDERLAY = { spacing: 25, stitchLength: 30, inset: 5 };
@@ -408,6 +412,16 @@ function regionsToStitches(
         });
       }
       const [rings] = remaining.splice(index, 1);
+
+      // Narrow shapes: satin across the stroke instead of a tatami fill
+      const satin = satinStitches(rings, writer.position, {
+        ...SATIN,
+        spacing: SATIN_SPACING[options.density],
+      });
+      if (satin) {
+        sew(satin);
+        continue;
+      }
 
       // Underlay, fill and outline as one thread: travel inside the region
       // instead of jumping (and trimming) between blocks
