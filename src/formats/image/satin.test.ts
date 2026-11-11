@@ -215,4 +215,25 @@ describe("satinStitches", () => {
     // transform (before: 1.9 times the spacing)
     expect(widest).toBeLessThanOrEqual(OPTIONS.spacing * 1.3);
   });
+
+  it("spreads the needle points on the inside of tight curves", () => {
+    // An o with a 1.2 mm stroke around a 0.8 mm hole: inside, the peaks
+    // crowd together; every other close one is pulled in (short stitch)
+    const plan = planSatin([circle(0, 0, 16), circle(0, 0, 4)], OPTIONS);
+    expect(plan).not.toBeNull();
+    let closest = Infinity;
+    for (const s of plan!.strokes) {
+      const left = s.left.filter((_, i) => i % 2 === 0);
+      const right = s.right.filter((_, i) => i % 2 === 1);
+      for (const side of [left, right]) {
+        for (let i = 1; i < side.length; i++) {
+          closest = Math.min(
+            closest,
+            Math.hypot(side[i].x - side[i - 1].x, side[i].y - side[i - 1].y),
+          );
+        }
+      }
+    }
+    expect(closest).toBeGreaterThanOrEqual(1);
+  });
 });

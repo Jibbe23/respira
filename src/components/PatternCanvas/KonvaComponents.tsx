@@ -11,7 +11,7 @@ import { canvasColors } from "../../utils/cssVariables";
  * pattern units of 0.1 mm), so the preview shows gaps where the fabric
  * would show through, not between hairlines
  */
-const THREAD_WIDTH = 3.5;
+export const THREAD_WIDTH = 3.5;
 
 interface GridProps {
   gridSize: number;

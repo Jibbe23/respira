@@ -38,12 +38,20 @@ const NARROW_SHARE = 0.9;
  * and that width is over BLOB_WIDTH (1.5 mm; closed eyes stay satin)
  */
 const BLOB_LENGTH = 4;
+const BLOB_WIDTH = 15;
 /**
  * Center line sampling for the satin peaks: fine enough that the outside
  * of a tight curve does not overshoot the spacing
  */
 const FINE_STEP = 0.25;
-const BLOB_WIDTH = 15;
+/**
+ * Short stitches: a peak closer than SHORT_DISTANCE (0.25 mm) to the one
+ * before it on the same side, the inside of a curve, is pulled in by
+ * SHORT_INSET of its reach (every other one), so the needle does not hit
+ * the same spot again and again
+ */
+const SHORT_DISTANCE = 2.5;
+const SHORT_INSET = 0.15;
 
 interface Raster {
   width: number;
@@ -531,6 +539,8 @@ export function planSatin(
 
   const strokes: SatinStroke[] = [];
   const halfWidths: number[] = [];
+  // Length of all center lines, for telling strokes from blobs
+  let length = 0;
   for (const s of live) {
     let points = s.pixels.map((i) => {
       const x = i % raster.width;
@@ -543,11 +553,19 @@ export function planSatin(
       points = extendToEdge([...points].reverse(), raster).reverse();
 
     // Edge points across the stroke, sampled finely along the center line
+    for (let i = 1; i < points.length; i++) {
+      length += Math.hypot(
+        points[i].x - points[i - 1].x,
+        points[i].y - points[i - 1].y,
+      );
+    }
+
     const fine = runAlongPath(points, FINE_STEP, 0);
+    // Direction over half the spacing either side, like the peaks are apart
+    // (shorter would follow the pixel steps of the center line)
+    const reachBack = Math.max(1, Math.round(options.spacing / 2 / FINE_STEP));
     if (fine.length < 2) continue;
     const edges = fine.map((p, i) => {
-      // Direction over about one unit either side
-      const reachBack = Math.round(1 / FINE_STEP);
       const prev = fine[Math.max(0, i - reachBack)];
       const next = fine[Math.min(fine.length - 1, i + reachBack)];
       const tx = next.x - prev.x;
@@ -562,6 +580,7 @@ export function planSatin(
       halfWidths.push(half);
       const reach = half + options.pullCompensation;
       return {
+        center: toPattern(p),
         left: toPattern({ x: p.x + nx * reach, y: p.y + ny * reach }),
         right: toPattern({ x: p.x - nx * reach, y: p.y - ny * reach }),
       };
@@ -569,8 +588,7 @@ export function planSatin(
     // Peaks alternate sides: the next sample once either edge has moved on
     // by half the spacing, so the outside of a curve does not fan out (the
     // inside gets denser instead)
-    const left: Point[] = [edges[0].left];
-    const right: Point[] = [edges[0].right];
+    const peaks = [edges[0]];
     let last = edges[0];
     for (let i = 1; i < edges.length; i++) {
       const e = edges[i];
@@ -578,13 +596,38 @@ export function planSatin(
         Math.hypot(e.left.x - last.left.x, e.left.y - last.left.y),
         Math.hypot(e.right.x - last.right.x, e.right.y - last.right.y),
       );
-      if (moved >= options.spacing / 2 || i === edges.length - 1) {
-        left.push(e.left);
-        right.push(e.right);
+      if (moved >= options.spacing / 2) {
+        peaks.push(e);
         last = e;
+      } else if (i === edges.length - 1 && moved >= options.spacing / 4) {
+        // The stroke end gets a peak of its own unless the last one is very
+        // close to it (no tiny stitch at the end)
+        peaks.push(e);
       }
     }
-    if (left.length < 2) continue;
+    if (peaks.length < 2) continue;
+    const left = peaks.map((e) => e.left);
+    const right = peaks.map((e) => e.right);
+    // Short stitches on each side (left peaks at even, right at odd samples)
+    for (const [side, first] of [
+      [left, 0],
+      [right, 1],
+    ] as const) {
+      let pulledIn = false;
+      for (let k = first + 2; k < peaks.length; k += 2) {
+        const close =
+          Math.hypot(side[k].x - side[k - 2].x, side[k].y - side[k - 2].y) <
+          SHORT_DISTANCE;
+        pulledIn = close && !pulledIn;
+        if (pulledIn) {
+          const c = peaks[k].center;
+          side[k] = {
+            x: c.x + (side[k].x - c.x) * (1 - SHORT_INSET),
+            y: c.y + (side[k].y - c.y) * (1 - SHORT_INSET),
+          };
+        }
+      }
+    }
     strokes.push({
       a: s.a,
       b: s.b,
@@ -611,15 +654,6 @@ export function planSatin(
   // Mean width = area / length of the center lines (one pixel per unit)
   let area = 0;
   for (const v of raster.inside) area += v;
-  let length = 0;
-  for (const s of strokes) {
-    for (let i = 1; i < s.center.length; i++) {
-      length += Math.hypot(
-        s.center[i].x - s.center[i - 1].x,
-        s.center[i].y - s.center[i - 1].y,
-      );
-    }
-  }
   const meanWidth = area / Math.max(1, length);
   if (meanWidth > BLOB_WIDTH && length < BLOB_LENGTH * meanWidth) return null;
 
