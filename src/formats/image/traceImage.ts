@@ -49,10 +49,17 @@ const PALETTE_ITERATIONS = 10;
 /** Neighbours closer than this (RGB distance) are not an edge to mix across */
 const MIN_EDGE_CONTRAST = 40;
 
+/** Mixed edge pixel between its left and right / upper and lower neighbour */
+const MIXED_ACROSS_X = 1;
+const MIXED_ACROSS_Y = 2;
+/** Widest blurred edge (pixels) whose pixels are snapped to a side */
+const MAX_EDGE_WIDTH = 6;
+
 /**
  * Pixels whose color is a mix of their two opposite neighbours (left and
  * right, or above and below): anti-aliased edges, and the mixed colors that
- * scaling an image adds along every edge
+ * scaling an image adds along every edge. MIXED_ACROSS_X or MIXED_ACROSS_Y
+ * for such a pixel (the direction across its edge), 0 for all others.
  */
 function mixedPixels({ data, width, height }: ImageData): Uint8Array {
   const mixed = new Uint8Array(width * height);
@@ -75,12 +82,85 @@ function mixedPixels({ data, width, height }: ImageData): Uint8Array {
     for (let x = 1; x < width - 1; x++) {
       const i = (y * width + x) * 4;
       if (data[i + 3] < 128) continue;
-      if (isMix(i, i - 4, i + 4) || isMix(i, i - width * 4, i + width * 4)) {
-        mixed[y * width + x] = 1;
+      if (isMix(i, i - 4, i + 4)) mixed[y * width + x] = MIXED_ACROSS_X;
+      else if (isMix(i, i - width * 4, i + width * 4)) {
+        mixed[y * width + x] = MIXED_ACROSS_Y;
       }
     }
   }
   return mixed;
+}
+
+/**
+ * Byte offset of the first pixel past a blurred edge, walking from (x, y)
+ * in direction (dx, dy) over edge pixels of the same direction (`axis`);
+ * -1 if the edge is wider than MAX_EDGE_WIDTH or runs into the border or a
+ * transparent pixel
+ */
+function edgeSide(
+  { data, width, height }: ImageData,
+  mixed: Uint8Array,
+  x: number,
+  y: number,
+  dx: number,
+  dy: number,
+  axis: number,
+): number {
+  for (let k = 1; k <= MAX_EDGE_WIDTH; k++) {
+    const nx = x + k * dx;
+    const ny = y + k * dy;
+    if (nx < 0 || ny < 0 || nx >= width || ny >= height) return -1;
+    const n = ny * width + nx;
+    if (mixed[n] === axis) continue;
+    if (mixed[n] || data[n * 4 + 3] < 128) return -1;
+    return n * 4;
+  }
+  return -1;
+}
+
+/**
+ * The image with every mixed edge pixel set to the color of the side of
+ * the edge it is closer to: a gray seam along a straight black edge on
+ * white would otherwise be traced as a strip of whatever palette color is
+ * closest to gray (e.g. a light pink). Blurred edges several pixels wide
+ * (an enlarged image) are followed to their solid colors on both sides; a
+ * pixel right in the middle goes to the darker side. Pixels whose edge
+ * has no solid color on both sides keep their color.
+ */
+export function snapMixedPixels(imageData: ImageData): ImageData {
+  const { data: source, width, height } = imageData;
+  const mixed = mixedPixels(imageData);
+  const data = new Uint8ClampedArray(source);
+  const luminance = (i: number) => source[i] + source[i + 1] + source[i + 2];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const p = y * width + x;
+      const axis = mixed[p];
+      if (!axis) continue;
+      const [dx, dy] = axis === MIXED_ACROSS_X ? [1, 0] : [0, 1];
+      const a = edgeSide(imageData, mixed, x, y, -dx, -dy, axis);
+      const b = edgeSide(imageData, mixed, x, y, dx, dy, axis);
+      if (a < 0 || b < 0) continue;
+      const i = p * 4;
+      let t = 0;
+      let length2 = 0;
+      for (let c = 0; c < 3; c++) {
+        const d = source[b + c] - source[a + c];
+        t += (source[i + c] - source[a + c]) * d;
+        length2 += d * d;
+      }
+      t /= Math.max(1, length2);
+      const side =
+        t < 0.5 ? a : t > 0.5 ? b : luminance(a) <= luminance(b) ? a : b;
+      data.set(source.subarray(side, side + 4), i);
+    }
+  }
+  return {
+    width,
+    height,
+    data,
+    colorSpace: imageData.colorSpace,
+  } as ImageData;
 }
 
 /**

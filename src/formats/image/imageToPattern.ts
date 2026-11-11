@@ -35,6 +35,7 @@ import {
   quantizePalette,
   findBackground,
   binarizeAlpha,
+  snapMixedPixels,
   type RGBA,
   type TracedImage,
 } from "./traceImage";
@@ -629,8 +630,10 @@ export function imageToPattern(
   imageData: ImageData,
   options: ImageToPatternOptions,
 ): PesPatternData | null {
+  // Edge pixels on their side of the edge: no strips of a third color
+  // along edges (palette, background and tracing all see the same pixels)
+  const image = snapMixedPixels(binarizeAlpha(imageData));
   // The background takes a color slot of its own when it is left out
-  const image = binarizeAlpha(imageData);
   const palette = quantizePalette(
     image,
     options.colors + (options.removeBackground ? 1 : 0),
