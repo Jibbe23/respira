@@ -59,7 +59,7 @@ export interface ImageToPatternOptions {
 }
 
 /** Stitch parameters (0.1 mm units) */
-const ROW_SPACING: Record<FillDensity, number> = { normal: 4, dense: 3.4 };
+const ROW_SPACING: Record<FillDensity, number> = { normal: 3.5, dense: 3 };
 /**
  * Fill rows reach this far past the edge: the fabric pulls them in, and
  * neighbouring areas overlap instead of leaving a gap (0.3 mm)
