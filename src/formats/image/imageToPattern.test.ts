@@ -13,7 +13,7 @@ import {
   repeatClosedRun,
 } from "./fillStitches";
 import { createTravelGraph, connectBlocks } from "./travel";
-import { MOVE } from "../import/constants";
+import { MOVE, TRIM } from "../import/constants";
 import { quantizePalette } from "./traceImage";
 
 type Pixel = [number, number, number, number];
@@ -208,6 +208,33 @@ describe("travel inside a region", () => {
         expect(x > 101 && y > 97.5 && y < 102.5).toBe(false);
       }
     }
+  });
+  it("does not hop onto the shape from a point beside it", () => {
+    // Needle 2 mm left of a square (e.g. the end of the previous letter):
+    // reaching the square is a jump, not a travel run starting at its edge
+    const square = [
+      { x: 0, y: 0 },
+      { x: 200, y: 0 },
+      { x: 200, y: 200 },
+      { x: 0, y: 200 },
+    ];
+    const blocks = tatamiFill([square], {
+      angle: 45,
+      spacing: 25,
+      stitchLength: 30,
+      inset: 5,
+    });
+    const graph = createTravelGraph([square], 45, 15);
+    const [run] = connectBlocks(
+      blocks,
+      graph,
+      { x: -20, y: 100 },
+      {
+        travelStitch: 25,
+      },
+    );
+    const ends = blocks.flatMap((b) => [b[0], b[b.length - 1]]);
+    expect(ends).toContainEqual(run[0]);
   });
 });
 
@@ -472,6 +499,34 @@ describe("imageToPattern", () => {
       expect.stringMatching(/RED|CARMINE/i),
       "BLACK",
     ]);
+  });
+
+  it("cuts between separate parts instead of stitching across the gap", () => {
+    // Two squares with a 2 mm gap around x = 0
+    const image = makeImage(100, 40, (x, y) => {
+      if (y < 10 || y >= 30) return WHITE;
+      if (x >= 10 && x < 40) return RED;
+      if (x >= 47 && x < 77) return RED;
+      return WHITE;
+    });
+    const { stitches } = imageToPattern(image, {
+      colors: 1,
+      widthMm: 20,
+      removeBackground: true,
+      ...TATAMI,
+    })!;
+    const jumps = stitches.filter((s) => s[2] & MOVE);
+    expect(jumps).toHaveLength(1);
+    expect(jumps[0][2] & TRIM).toBeTruthy();
+    // No sewn stitch crosses the middle of the gap
+    const crossing = stitches.filter(
+      (s, i) =>
+        i > 0 &&
+        !(s[2] & MOVE) &&
+        Math.min(s[0], stitches[i - 1][0]) < 0 &&
+        Math.max(s[0], stitches[i - 1][0]) > 0,
+    );
+    expect(crossing).toHaveLength(0);
   });
 
   it("returns null when only the background is left", () => {

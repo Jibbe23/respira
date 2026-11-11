@@ -9,7 +9,9 @@
  */
 
 import {
+  distanceToRings,
   fillRowCrossings,
+  insideRings,
   runAlongPath,
   type FillRule,
   type Point,
@@ -21,6 +23,11 @@ import {
 const ROW_TRAVEL_COST = 2;
 /** Farther from the graph than this, a point is reached by a jump */
 const MAX_HOP = 30;
+/**
+ * A hop may start this far outside the region (0.5 mm): satin reaches a
+ * little past the edge
+ */
+const NEAR_REGION = 5;
 /** Candidates checked when looking for a node reachable in a straight line */
 const HOP_CANDIDATES = 8;
 
@@ -34,7 +41,9 @@ export interface TravelGraph {
   nodes: Point[];
   edges: TravelEdge[][];
   // Straight hops onto the graph must not cross these (none: no check)
+  // and must stay inside them by `rule`
   rings?: Ring[];
+  rule?: FillRule;
 }
 
 const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -61,7 +70,7 @@ export function createTravelGraph(
   spacing: number,
   rule: FillRule = "evenodd",
 ): TravelGraph {
-  const graph: TravelGraph = { nodes: [], edges: [], rings };
+  const graph: TravelGraph = { nodes: [], edges: [], rings, rule };
   const addNode = (p: Point) => {
     graph.nodes.push(p);
     graph.edges.push([]);
@@ -103,7 +112,10 @@ export function createTravelGraph(
 
 /**
  * Nearest node that can be reached from `p` in a straight line without
- * leaving the region; -1 if there is none close enough
+ * leaving the region; -1 if there is none close enough. The hop must not
+ * cross an edge, and its middle must lie in the region (or next to it): a
+ * hop from a point outside onto a node on the edge crosses nothing, but
+ * would be a stitch across the gap to the next region.
  */
 function hopNode(graph: TravelGraph, p: Point): number {
   const order = graph.nodes
@@ -112,12 +124,26 @@ function hopNode(graph: TravelGraph, p: Point): number {
     .sort((a, b) => a.d - b.d)
     .slice(0, HOP_CANDIDATES);
   const rings = graph.rings;
+  // From a point inside, a hop that crosses no edge stays inside: only hops
+  // from outside need the middle check (computed once, when needed)
+  let outside: boolean | undefined;
   for (const { i } of order) {
     const node = graph.nodes[i];
     const blocked = rings?.some((ring) =>
       ring.some((a, k) => crosses(p, node, a, ring[(k + 1) % ring.length])),
     );
-    if (!blocked) return i;
+    if (blocked) continue;
+    if (!rings) return i;
+    outside ??= !insideRings(p, rings, graph.rule);
+    if (!outside) return i;
+    const middle = { x: (p.x + node.x) / 2, y: (p.y + node.y) / 2 };
+    if (
+      !insideRings(middle, rings, graph.rule) &&
+      distanceToRings(middle, rings) > NEAR_REGION
+    ) {
+      continue;
+    }
+    return i;
   }
   return -1;
 }

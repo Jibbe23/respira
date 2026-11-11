@@ -674,3 +674,24 @@ describe("encodeStitchesToPen", () => {
     expect(decoded[10].isDataEnd).toBe(true);
   });
 });
+
+describe("encodeStitchesToPen with marked cuts", () => {
+  it("locks and cuts at a short jump marked with TRIM", () => {
+    // 2 mm jump: shorter than the automatic cut length, but marked
+    const stitches = [
+      [0, 0, STITCH, 0],
+      [10, 0, STITCH, 0],
+      [30, 0, MOVE | TRIM, 0],
+      [40, 0, STITCH, 0],
+      [50, 0, STITCH | END, 0],
+    ];
+    const marked = decodeAllPenStitches(encodeStitchesToPen(stitches).penBytes);
+    expect(marked.some((s) => s.isFeed && s.isCut)).toBe(true);
+
+    const plain = stitches.map((s) => [s[0], s[1], s[2] & ~TRIM, s[3]]);
+    const unmarked = decodeAllPenStitches(encodeStitchesToPen(plain).penBytes);
+    expect(unmarked.some((s) => s.isCut)).toBe(false);
+    // Lock stitches on both sides of the cut
+    expect(marked.length).toBeGreaterThan(unmarked.length + 10);
+  });
+});

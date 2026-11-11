@@ -207,7 +207,9 @@ export function encodeStitchesToPen(stitches: number[][]): PenEncodingResult {
     if (cmd & MOVE) {
       const jumpDist = Math.sqrt((absX - prevX) ** 2 + (absY - prevY) ** 2);
 
-      if (!isFirstStitch && jumpDist > FEED_LENGTH) {
+      // Long jumps, and jumps marked for a cut (e.g. between the letters of
+      // a converted image), get lock stitches and a cut
+      if (!isFirstStitch && (jumpDist > FEED_LENGTH || cmd & TRIM)) {
         // Long jump - add finishing lock stitches at previous position
         // Loop B: End/Cut Vector - Look BACKWARD at previous stitches
         // This hides the knot inside the embroidery we just finished

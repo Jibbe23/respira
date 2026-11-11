@@ -5,7 +5,7 @@
  */
 
 import type { PesPatternData } from "../import/client";
-import { MOVE } from "../import/constants";
+import { MOVE, TRIM } from "../import/constants";
 import { encodeStitchesToPen } from "../pen/encoder";
 import { decodePenData } from "../pen/decoder";
 import { calculateBoundsFromDecodedStitches } from "../../components/PatternCanvas/patternCanvasHelpers";
@@ -81,8 +81,14 @@ const MIN_REGION_AREA = 40;
 const MIN_UNDERLAY_AREA = 1000;
 /** Threads covering less than this share of the sewn area are merged */
 const MIN_THREAD_SHARE = 0.02;
-/** Longer moves inside one color become jumps instead of stitches */
+/** Longer moves inside one region become jumps instead of stitches */
 const MAX_TRAVEL_STITCH = 30;
+/**
+ * Moving on to a separate part of the same color (another letter, digit or
+ * dot): longer than this (1 mm) it is a jump marked for a cut, so no thread
+ * spans the gap; shorter, the parts practically touch
+ */
+const MAX_GAP_STITCH = 10;
 /** Running stitches when travelling inside a region */
 const TRAVEL_STITCH_LENGTH = 25;
 /** Row spacing of the travel graph (coarser than the fill, enough to route) */
@@ -367,8 +373,9 @@ function groupCellsByThread(
 
 /**
  * Collects stitches [x, y, cmd, colorIndex]; `sew` appends a run of points
- * and travels to its start first (a stitch for moves up to `maxTravel`, a
- * jump otherwise)
+ * and travels to its start first: a stitch for moves up to `maxTravel`,
+ * otherwise a jump. With `newPart` (first run of a separate part) the limit
+ * is MAX_GAP_STITCH and the jump is marked for a cut.
  */
 function createStitchWriter(maxTravel: number) {
   const stitches: number[][] = [];
@@ -380,14 +387,21 @@ function createStitchWriter(maxTravel: number) {
     get position() {
       return position;
     },
-    sew(points: Point[], colorIndex: number) {
+    sew(points: Point[], colorIndex: number, newPart = false) {
       if (points.length === 0) return;
       const [first, ...rest] = points;
-      const jump =
-        colorIndex === currentColor &&
-        position !== null &&
-        Math.hypot(first.x - position.x, first.y - position.y) > maxTravel;
-      stitches.push([first.x, first.y, jump ? MOVE : 0, colorIndex]);
+      const gap =
+        colorIndex === currentColor && position !== null
+          ? Math.hypot(first.x - position.x, first.y - position.y)
+          : 0;
+      const cmd = newPart
+        ? gap > MAX_GAP_STITCH
+          ? MOVE | TRIM
+          : 0
+        : gap > maxTravel
+          ? MOVE
+          : 0;
+      stitches.push([first.x, first.y, cmd, colorIndex]);
       for (const p of rest) stitches.push([p.x, p.y, 0, colorIndex]);
       position = points[points.length - 1];
       currentColor = colorIndex;
@@ -454,7 +468,13 @@ function regionsToStitches(
 ): number[][] {
   const writer = createStitchWriter(MAX_TRAVEL_STITCH);
   groups.forEach((group, colorIndex) => {
-    const sew = (points: Point[]) => writer.sew(points, colorIndex);
+    // The first run of each region moves on to a separate part
+    let newPart = true;
+    const sew = (points: Point[]) => {
+      if (points.length === 0) return;
+      writer.sew(points, colorIndex, newPart);
+      newPart = false;
+    };
 
     // Next region: the one whose outline starts closest to the needle
     const remaining = [...group.items];
@@ -474,6 +494,7 @@ function regionsToStitches(
         });
       }
       const [rings] = remaining.splice(index, 1);
+      newPart = true;
 
       // Outline along the edge
       const sewOutline = (
