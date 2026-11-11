@@ -27,6 +27,8 @@ const SPUR_FACTOR = 1.5;
 const SMOOTH = 3;
 /** Narrowest satin (half width): very thin tips still get a visible stitch */
 const MIN_HALF_WIDTH = 2;
+/** No satin stitch longer than this share of maxWidth, even at junctions */
+const MAX_WIDTH_FACTOR = 1.25;
 /** Share of the stroke samples that must be narrower than maxWidth */
 const NARROW_SHARE = 0.9;
 
@@ -141,7 +143,6 @@ function skeletonize(
   maxRounds: number,
 ): Uint8Array | null {
   const img = inside.slice();
-  const at = (x: number, y: number) => img[y * width + x];
   let changed = true;
   const remove: number[] = [];
   for (let round = 0; changed; round++) {
@@ -151,23 +152,29 @@ function skeletonize(
       remove.length = 0;
       for (let y = 1; y < height - 1; y++) {
         for (let x = 1; x < width - 1; x++) {
-          if (!at(x, y)) continue;
-          const p = [
-            at(x, y - 1),
-            at(x + 1, y - 1),
-            at(x + 1, y),
-            at(x + 1, y + 1),
-            at(x, y + 1),
-            at(x - 1, y + 1),
-            at(x - 1, y),
-            at(x - 1, y - 1),
-          ];
-          const b = p.reduce((sum, value) => sum + value, 0);
+          const i = y * width + x;
+          if (!img[i]) continue;
+          // Neighbours clockwise from north
+          const p2 = img[i - width];
+          const p3 = img[i - width + 1];
+          const p4 = img[i + 1];
+          const p5 = img[i + width + 1];
+          const p6 = img[i + width];
+          const p7 = img[i + width - 1];
+          const p8 = img[i - 1];
+          const p9 = img[i - width - 1];
+          const b = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
           if (b < 2 || b > 6) continue;
-          let a = 0;
-          for (let i = 0; i < 8; i++) if (!p[i] && p[(i + 1) % 8]) a++;
+          const a =
+            (!p2 && p3 ? 1 : 0) +
+            (!p3 && p4 ? 1 : 0) +
+            (!p4 && p5 ? 1 : 0) +
+            (!p5 && p6 ? 1 : 0) +
+            (!p6 && p7 ? 1 : 0) +
+            (!p7 && p8 ? 1 : 0) +
+            (!p8 && p9 ? 1 : 0) +
+            (!p9 && p2 ? 1 : 0);
           if (a !== 1) continue;
-          const [p2, , p4, , p6, , p8] = p;
           if (
             step === 0
               ? p2 * p4 * p6 || p4 * p6 * p8
@@ -175,7 +182,7 @@ function skeletonize(
           ) {
             continue;
           }
-          remove.push(y * width + x);
+          remove.push(i);
         }
       }
       for (const i of remove) img[i] = 0;
@@ -297,8 +304,17 @@ function skeletonGraph(skeleton: Uint8Array, width: number): SkeletonGraph {
   return { nodePixels, strokes };
 }
 
-/** Cut short spurs at end points (thinning artifacts at corners) */
-function pruneSpurs(graph: SkeletonGraph, distance: Float32Array) {
+/**
+ * Cut spurs at end points that reach hardly beyond the satin of the stroke
+ * they branch off (thinning artifacts at corners). Real short arms, like
+ * the bar of a t, reach farther and stay.
+ */
+function pruneSpurs(
+  graph: SkeletonGraph,
+  distance: Float32Array,
+  width: number,
+) {
+  const point = (i: number) => ({ x: i % width, y: Math.floor(i / width) });
   for (let round = 0; round < 3; round++) {
     const degree = new Array(graph.nodePixels.length).fill(0);
     for (const s of graph.strokes) {
@@ -309,19 +325,26 @@ function pruneSpurs(graph: SkeletonGraph, distance: Float32Array) {
     let cut = false;
     for (const s of graph.strokes) {
       if (s.removed || s.a === s.b) continue;
-      const [tip, base] =
-        degree[s.a] === 1 && degree[s.b] >= 3
-          ? [s.a, s.b]
-          : degree[s.b] === 1 && degree[s.a] >= 3
-            ? [s.b, s.a]
-            : [-1, -1];
-      if (tip < 0) continue;
-      const width = Math.max(...graph.nodePixels[base].map((i) => distance[i]));
-      if (s.pixels.length < SPUR_FACTOR * width) {
+      const tipAtB = degree[s.b] === 1 && degree[s.a] >= 3;
+      const tipAtA = degree[s.a] === 1 && degree[s.b] >= 3;
+      if (!tipAtA && !tipAtB) continue;
+      const base = tipAtB ? s.a : s.b;
+      const tipPixel = tipAtB ? s.pixels[s.pixels.length - 1] : s.pixels[0];
+      const basePixel = tipAtB ? s.pixels[0] : s.pixels[s.pixels.length - 1];
+      // How far the stroke reaches from the junction, to the edge of the
+      // shape, against the half width of the satin there
+      const tip = point(tipPixel);
+      const from = point(basePixel);
+      const reach =
+        Math.hypot(tip.x - from.x, tip.y - from.y) + distance[tipPixel];
+      const baseHalf = Math.max(
+        ...graph.nodePixels[base].map((i) => distance[i]),
+      );
+      if (reach < SPUR_FACTOR * baseHalf) {
         s.removed = true;
         cut = true;
-        degree[tip]--;
-        degree[base]--;
+        degree[s.a]--;
+        degree[s.b]--;
       }
     }
     if (!cut) break;
@@ -333,30 +356,50 @@ function pruneSpurs(graph: SkeletonGraph, distance: Float32Array) {
  * nodes at stair steps of diagonal lines), so each stroke is sewn in one go
  */
 function joinStrokes(graph: SkeletonGraph) {
-  for (;;) {
-    const at = new Map<number, Stroke[]>();
-    for (const s of graph.strokes) {
-      if (s.removed || s.a === s.b) continue;
-      at.set(s.a, [...(at.get(s.a) ?? []), s]);
-      at.set(s.b, [...(at.get(s.b) ?? []), s]);
+  const at = new Map<number, Set<Stroke>>();
+  const attach = (s: Stroke) => {
+    for (const node of [s.a, s.b]) {
+      if (!at.has(node)) at.set(node, new Set());
+      at.get(node)!.add(s);
     }
-    // Self-loops count twice at their node
-    for (const s of graph.strokes) {
-      if (!s.removed && s.a === s.b) at.set(s.a, [s, s, s]);
-    }
-    const entry = [...at.entries()].find(
-      ([, list]) => list.length === 2 && list[0] !== list[1],
-    );
-    if (!entry) return;
-    const [node, [s1, s2]] = entry;
+  };
+  const detach = (s: Stroke) => {
+    at.get(s.a)?.delete(s);
+    at.get(s.b)?.delete(s);
+  };
+  // Number of stroke ends at a node (a loop counts twice)
+  const degree = (node: number) => {
+    let n = 0;
+    for (const s of at.get(node) ?? []) n += s.a === s.b ? 2 : 1;
+    return n;
+  };
+  for (const s of graph.strokes) if (!s.removed) attach(s);
+
+  const queue = [...at.keys()];
+  while (queue.length > 0) {
+    const node = queue.pop()!;
+    if (degree(node) !== 2) continue;
+    const pair = [...at.get(node)!];
+    if (pair.length !== 2) continue; // a loop on its own
+    const [s1, s2] = pair;
     // s1 ends at the node, s2 starts there
     const first = s1.b === node ? s1.pixels : [...s1.pixels].reverse();
     const second = s2.a === node ? s2.pixels : [...s2.pixels].reverse();
-    const a = s1.b === node ? s1.a : s1.b;
-    const b = s2.a === node ? s2.b : s2.a;
+    // Node clusters can have several pixels: keep both ends then
+    const rest =
+      first[first.length - 1] === second[0] ? second.slice(1) : second;
+    const joined: Stroke = {
+      a: s1.b === node ? s1.a : s1.b,
+      b: s2.a === node ? s2.b : s2.a,
+      pixels: [...first, ...rest],
+    };
     s1.removed = true;
     s2.removed = true;
-    graph.strokes.push({ a, b, pixels: [...first, ...second.slice(1)] });
+    detach(s1);
+    detach(s2);
+    graph.strokes.push(joined);
+    attach(joined);
+    queue.push(joined.a, joined.b);
   }
 }
 
@@ -413,7 +456,8 @@ function extendToEdge(points: Point[], raster: Raster): Point[] {
   for (let t = 1; t < 200; t++) {
     const x = end.x + dx * t;
     const y = end.y + dy * t;
-    const i = Math.floor(y) * raster.width + Math.floor(x);
+    // Pixel centers are at whole numbers
+    const i = Math.round(y) * raster.width + Math.round(x);
     if (!raster.inside[i]) break;
     extra.push({ x, y });
   }
@@ -429,24 +473,31 @@ interface SatinStroke {
 }
 
 /**
- * Satin stitches for a narrow region as one continuous run (underlay and
- * satin), starting near `start`; null if the region is too wide for satin
- * or has no usable center line (then it gets a tatami fill)
+ * Satin stitches for a narrow region: one run (underlay and satin) per
+ * connected part, the first starting near `start`; null if the region is
+ * too wide for satin or has no usable center line (then it gets a tatami
+ * fill)
  */
 export function satinStitches(
   rings: Ring[],
   start: Point | null,
   options: SatinOptions,
-): Point[] | null {
+): Point[][] | null {
   const raster = rasterize(rings);
   if (!raster) return null;
   const distance = distanceTransform(raster);
+  // The center line runs through the widest spot: too wide, no satin (and
+  // no thinning, which is slow for large areas)
+  const maxStitch = options.maxWidth * MAX_WIDTH_FACTOR;
+  let widest = 0;
+  for (const d of distance) widest = Math.max(widest, d);
+  if (2 * (widest - 0.5) > maxStitch) return null;
   // Thin shapes are done after about half their width in rounds
   const skeleton = skeletonize(raster, Math.ceil(options.maxWidth / 2) + 4);
   if (!skeleton) return null;
   const graph = skeletonGraph(skeleton, raster.width);
   joinStrokes(graph);
-  pruneSpurs(graph, distance);
+  pruneSpurs(graph, distance, raster.width);
   joinStrokes(graph);
   const live = graph.strokes.filter((s) => !s.removed);
   if (live.length === 0) return null;
@@ -506,7 +557,8 @@ export function satinStitches(
   }
   if (strokes.length === 0) return null;
 
-  // Narrow enough? (junctions are wider, so look at most of the samples)
+  // Narrow enough? Most of the stroke within maxWidth (junctions are
+  // wider), and no stitch much longer anywhere (long satin snags)
   halfWidths.sort((a, b) => a - b);
   const typical =
     halfWidths[
@@ -516,40 +568,41 @@ export function satinStitches(
       )
     ];
   if (2 * typical > options.maxWidth) return null;
-
-  // Start at the node nearest to the needle, preferably a free end
-  const nodePoint = (id: number) => {
-    const i = graph.nodePixels[id][0];
-    const x = i % raster.width;
-    return toPattern({ x, y: (i - x) / raster.width });
-  };
-  const used = [...new Set(strokes.flatMap((s) => [s.a, s.b]))];
-  let first = used[0];
-  if (start) {
-    let best = Infinity;
-    for (const id of used) {
-      const p = nodePoint(id);
-      const d =
-        Math.hypot(p.x - start.x, p.y - start.y) + (degree[id] === 1 ? 0 : 20);
-      if (d < best) {
-        best = d;
-        first = id;
-      }
-    }
-  }
+  if (2 * halfWidths[halfWidths.length - 1] > maxStitch) return null;
 
   const byNode = new Map<number, SatinStroke[]>();
   for (const s of strokes) {
     byNode.set(s.a, [...(byNode.get(s.a) ?? []), s]);
     if (s.b !== s.a) byNode.set(s.b, [...(byNode.get(s.b) ?? []), s]);
   }
+  const sewn = new Set<SatinStroke>();
+
+  // Where sewing can start: the ends of unsewn strokes, free ends preferred
+  const nearestStart = (from: Point | null): number => {
+    let best = Infinity;
+    let node = -1;
+    for (const s of strokes) {
+      if (sewn.has(s)) continue;
+      for (const [id, p] of [
+        [s.a, s.center[0]],
+        [s.b, s.center[s.center.length - 1]],
+      ] as const) {
+        const d =
+          (from ? Math.hypot(p.x - from.x, p.y - from.y) : 0) +
+          (degree[id] === 1 ? 0 : 20);
+        if (d < best) {
+          best = d;
+          node = id;
+        }
+      }
+    }
+    return node;
+  };
 
   // Depth-first: every stroke out (center run) and back (satin), so the
   // needle is at the node again afterwards
-  const run: Point[] = [];
-  const sewn = new Set<SatinStroke>();
-  const visited = new Set<number>([first]);
-  const visit = (node: number) => {
+  const visited = new Set<number>();
+  const sewFrom = (node: number, run: Point[]) => {
     for (const s of byNode.get(node) ?? []) {
       if (sewn.has(s)) continue;
       sewn.add(s);
@@ -562,7 +615,7 @@ export function satinStitches(
       run.push(...runAlongPath(center, options.underlayStitch, 0));
       if (!visited.has(other)) {
         visited.add(other);
-        visit(other);
+        sewFrom(other, run);
       }
       // Back to `node` in zigzag from edge to edge, one stitch per sample
       for (let i = left.length - 1; i >= 0; i--) {
@@ -571,14 +624,19 @@ export function satinStitches(
       run.push(center[0]);
     }
   };
-  visit(first);
 
-  // Strokes not connected to the start (should not happen for one region)
-  for (const s of strokes) {
-    if (!sewn.has(s)) {
-      visited.add(s.a);
-      visit(s.a);
-    }
+  // One run per connected part (the caller jumps between them)
+  const runs: Point[][] = [];
+  let position = start;
+  for (;;) {
+    const first = nearestStart(position);
+    if (first < 0) break;
+    const run: Point[] = [];
+    visited.add(first);
+    sewFrom(first, run);
+    if (run.length === 0) break;
+    runs.push(run);
+    position = run[run.length - 1];
   }
-  return run;
+  return runs.length > 0 ? runs : null;
 }

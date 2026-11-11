@@ -419,7 +419,7 @@ function regionsToStitches(
         spacing: SATIN_SPACING[options.density],
       });
       if (satin) {
-        sew(satin);
+        satin.forEach(sew);
         continue;
       }
 
