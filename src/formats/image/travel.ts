@@ -21,6 +21,8 @@ import {
 const ROW_TRAVEL_COST = 2;
 /** Farther from the graph than this, a point is reached by a jump */
 const MAX_HOP = 30;
+/** The needle counts as in the region up to this far outside (0.5 mm) */
+const NEAR_REGION = 5;
 /** Candidates checked when looking for a node reachable in a straight line */
 const HOP_CANDIDATES = 8;
 
@@ -99,6 +101,43 @@ export function createTravelGraph(
     });
   }
   return graph;
+}
+
+/** Distance from p to segment ab */
+function segmentDistance(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const t = Math.max(
+    0,
+    Math.min(
+      1,
+      ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1),
+    ),
+  );
+  return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+}
+
+/**
+ * Is p inside the rings (crossing count) or at most NEAR_REGION outside? A
+ * needle in another region must not travel here: that stitch would cross
+ * the gap between the two
+ */
+function nearRegion(p: Point, rings: Ring[]): boolean {
+  let inside = false;
+  for (const ring of rings) {
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const a = ring[i];
+      const b = ring[j];
+      if (segmentDistance(p, a, b) <= NEAR_REGION) return true;
+      if (
+        a.y > p.y !== b.y > p.y &&
+        p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x
+      ) {
+        inside = !inside;
+      }
+    }
+  }
+  return inside;
 }
 
 /**
@@ -236,7 +275,10 @@ export function connectBlocks(
     let reversed = false;
     let travel: Point[] | null = null;
 
-    const source = position ? hopNode(graph, position) : -1;
+    const source =
+      position && (!graph.rings || nearRegion(position, graph.rings))
+        ? hopNode(graph, position)
+        : -1;
     if (source >= 0) {
       const targets = new Set<number>();
       for (const block of remaining) {
@@ -250,7 +292,11 @@ export function connectBlocks(
         reversed = remaining[index].ends.find(
           (e) => e.node === found.node,
         )!.reversed;
-        travel = found.path;
+        // From the needle itself: the hop onto the graph stays inside
+        travel =
+          distance(position!, found.path[0]) > 0
+            ? [position!, ...found.path]
+            : found.path;
       }
     }
     if (!travel && position) {

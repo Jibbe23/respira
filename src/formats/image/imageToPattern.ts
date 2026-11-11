@@ -5,7 +5,7 @@
  */
 
 import type { PesPatternData } from "../import/client";
-import { MOVE } from "../import/constants";
+import { MOVE, TRIM } from "../import/constants";
 import { encodeStitchesToPen } from "../pen/encoder";
 import { decodePenData } from "../pen/decoder";
 import { calculateBoundsFromDecodedStitches } from "../../components/PatternCanvas/patternCanvasHelpers";
@@ -81,8 +81,12 @@ const MIN_REGION_AREA = 40;
 const MIN_UNDERLAY_AREA = 1000;
 /** Threads covering less than this share of the sewn area are merged */
 const MIN_THREAD_SHARE = 0.02;
-/** Longer moves inside one color become jumps instead of stitches */
-const MAX_TRAVEL_STITCH = 30;
+/**
+ * Between separate parts of one color, moves longer than this (0.5 mm)
+ * become a jump with a cut (no thread across the gap), shorter ones a stitch
+ * (the parts practically touch)
+ */
+const MAX_TRAVEL_STITCH = 5;
 /** Running stitches when travelling inside a region */
 const TRAVEL_STITCH_LENGTH = 25;
 /** Row spacing of the travel graph (coarser than the fill, enough to route) */
@@ -367,8 +371,8 @@ function groupCellsByThread(
 
 /**
  * Collects stitches [x, y, cmd, colorIndex]; `sew` appends a run of points
- * and travels to its start first (a stitch for moves up to `maxTravel`, a
- * jump otherwise)
+ * and travels to its start first (a stitch for moves up to `maxTravel`,
+ * otherwise a jump marked for a cut, so no thread spans the gap)
  */
 function createStitchWriter(maxTravel: number) {
   const stitches: number[][] = [];
@@ -383,11 +387,15 @@ function createStitchWriter(maxTravel: number) {
     sew(points: Point[], colorIndex: number) {
       if (points.length === 0) return;
       const [first, ...rest] = points;
-      const jump =
-        colorIndex === currentColor &&
-        position !== null &&
-        Math.hypot(first.x - position.x, first.y - position.y) > maxTravel;
-      stitches.push([first.x, first.y, jump ? MOVE : 0, colorIndex]);
+      const sameColor = colorIndex === currentColor && position !== null;
+      const gap = sameColor
+        ? Math.hypot(first.x - position!.x, first.y - position!.y)
+        : Infinity;
+      // A run that starts at the needle needs no stitch to get there
+      if (gap >= 0.01) {
+        const jump = sameColor && gap > maxTravel;
+        stitches.push([first.x, first.y, jump ? MOVE | TRIM : 0, colorIndex]);
+      }
       for (const p of rest) stitches.push([p.x, p.y, 0, colorIndex]);
       position = points[points.length - 1];
       currentColor = colorIndex;

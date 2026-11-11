@@ -13,7 +13,7 @@ import {
   repeatClosedRun,
 } from "./fillStitches";
 import { createTravelGraph, connectBlocks } from "./travel";
-import { MOVE } from "../import/constants";
+import { MOVE, TRIM } from "../import/constants";
 import { quantizePalette } from "./traceImage";
 
 type Pixel = [number, number, number, number];
@@ -472,6 +472,34 @@ describe("imageToPattern", () => {
       expect.stringMatching(/RED|CARMINE/i),
       "BLACK",
     ]);
+  });
+
+  it("cuts between separate parts instead of stitching across the gap", () => {
+    // Two squares 2 mm apart (0.3 mm per px)
+    const image = makeImage(100, 40, (x, y) => {
+      if (y < 10 || y >= 30) return WHITE;
+      if (x >= 10 && x < 40) return RED;
+      if (x >= 47 && x < 77) return RED;
+      return WHITE;
+    });
+    const { stitches } = imageToPattern(image, {
+      colors: 1,
+      widthMm: 20,
+      removeBackground: true,
+      ...TATAMI,
+    })!;
+    const jumps = stitches.filter((s) => s[2] & MOVE);
+    expect(jumps).toHaveLength(1);
+    expect(jumps[0][2] & TRIM).toBeTruthy();
+    // No stitch (sewn) crosses the gap between x = -1.5 mm and +0.6 mm
+    const crossing = stitches.filter(
+      (s, i) =>
+        i > 0 &&
+        !(s[2] & MOVE) &&
+        Math.min(s[0], stitches[i - 1][0]) < -20 &&
+        Math.max(s[0], stitches[i - 1][0]) > 10,
+    );
+    expect(crossing).toHaveLength(0);
   });
 
   it("returns null when only the background is left", () => {
