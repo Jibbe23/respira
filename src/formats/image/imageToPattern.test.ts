@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { imageToPattern, type ImageToPatternOptions } from "./imageToPattern";
+import {
+  imageToPattern,
+  patternSizeMm,
+  type ImageToPatternOptions,
+} from "./imageToPattern";
 import { crossStitchRuns } from "./crossStitch";
 import {
   tatamiFill,
@@ -219,7 +223,12 @@ describe("imageToPattern", () => {
     expect(threads).toHaveLength(2);
     const names = threads.map((t) => t.description);
     expect(names.some((n) => /RED/i.test(n ?? ""))).toBe(true);
-    expect(names.some((n) => /BLUE/i.test(n ?? ""))).toBe(true);
+    // A blue thread (pure blue is nearest to ULTRA MARINE)
+    const isBlue = (hex: string) => {
+      const [r, g, b] = [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16));
+      return b > 100 && b > r + 50 && b > g + 50;
+    };
+    expect(threads.some((t) => isBlue(t.hex))).toBe(true);
 
     // Width as requested (lock stitches add a few tenths of a millimetre)
     expect(Math.abs(bounds.maxX - bounds.minX - 600)).toBeLessThanOrEqual(10);
@@ -275,6 +284,104 @@ describe("imageToPattern", () => {
       expect.stringMatching(/RED|CARMINE/i),
     ]);
   });
+
+  it("keeps small details such as a full stop", () => {
+    // Square on the left, a 6 × 6 px dot at the right edge: 60 mm over
+    // 376 px makes the dot about 0.9 mm²
+    const BLACK: Pixel = [0, 0, 0, 255];
+    const image = makeImage(400, 200, (x, y) => {
+      if (x >= 10 && x < 200 && y >= 10 && y < 190) return BLACK;
+      if (x >= 380 && x < 386 && y >= 150 && y < 156) return BLACK;
+      return WHITE;
+    });
+    const { stitches } = imageToPattern(image, {
+      colors: 1,
+      widthMm: 60,
+      removeBackground: true,
+      ...TATAMI,
+    })!;
+    // The square ends near the center, the dot is near +29 mm
+    expect(stitches.some((s) => !(s[2] & MOVE) && s[0] > 250)).toBe(true);
+  });
+
+  it("gives colors with the same nearest thread their own threads", () => {
+    // Both are nearest to MINT GREEN, but LEAF GREEN is closer to the second
+    // than the first color is (like skin next to cream)
+    const LIGHT: Pixel = [112, 230, 114, 255];
+    const SAGE: Pixel = [139, 193, 124, 255];
+    const image = makeImage(120, 60, (x, y) => {
+      if (y < 10 || y >= 50 || x < 10 || x >= 110) return WHITE;
+      return x < 60 ? LIGHT : SAGE;
+    });
+    const { threads } = imageToPattern(image, {
+      colors: 2,
+      widthMm: 60,
+      removeBackground: true,
+      ...TATAMI,
+    })!;
+    expect(threads.map((t) => t.description).sort()).toEqual([
+      "LEAF GREEN",
+      "MINT GREEN",
+    ]);
+  });
+
+  it("lets shades of one color share their thread", () => {
+    const SHADE: Pixel = [170, 20, 20, 255];
+    const image = makeImage(120, 60, (x, y) => {
+      if (y < 10 || y >= 50 || x < 10 || x >= 110) return WHITE;
+      return x < 60 ? [200, 30, 30, 255] : SHADE;
+    });
+    const { threads, stitches } = imageToPattern(image, {
+      colors: 2,
+      widthMm: 60,
+      removeBackground: true,
+      ...TATAMI,
+    })!;
+    expect(threads).toHaveLength(1);
+    // Traced as one area: no jump between the halves
+    expect(stitches.some((s) => s[2] & MOVE)).toBe(false);
+  });
+
+  it("sews black on a transparent background in black", () => {
+    const CLEAR: Pixel = [0, 0, 0, 0];
+    const image = makeImage(60, 60, (x, y) =>
+      x >= 10 && x < 50 && y >= 10 && y < 50 ? [0, 0, 0, 255] : CLEAR,
+    );
+    const { threads } = imageToPattern(image, {
+      colors: 1,
+      widthMm: 40,
+      removeBackground: true,
+      ...TATAMI,
+    })!;
+    expect(threads.map((t) => t.description)).toEqual(["BLACK"]);
+  });
+
+  it.each(["tatami", "cross"] as const)(
+    "scales a %s design down until it fits the height",
+    (fill) => {
+      // 40 × 100 px: 80 mm wide would be 200 mm tall
+      const tall = makeImage(60, 120, (x, y) =>
+        x >= 10 && x < 50 && y >= 10 && y < 110 ? RED : WHITE,
+      );
+      const options = {
+        colors: 1,
+        widthMm: 80,
+        removeBackground: true,
+        ...TATAMI,
+        fill,
+      };
+      expect(
+        patternSizeMm(imageToPattern(tall, options)!).height,
+      ).toBeGreaterThan(100);
+
+      const fitted = patternSizeMm(
+        imageToPattern(tall, { ...options, maxHeightMm: 100 })!,
+      );
+      expect(fitted.height).toBeLessThanOrEqual(100);
+      expect(fitted.height).toBeGreaterThan(90);
+      expect(fitted.width).toBeLessThan(45);
+    },
+  );
 
   it("returns null when only the background is left", () => {
     const blank = makeImage(40, 40, () => WHITE);

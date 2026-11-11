@@ -23,6 +23,7 @@ import type { PesPatternData } from "../../formats/import/pesImporter";
 import { loadImageData } from "../../formats/image/loadImage";
 import {
   imageToPattern,
+  patternSizeMm,
   type FillDensity,
   type FillType,
   type ImageToPatternOptions,
@@ -138,6 +139,8 @@ export function ImageToEmbroideryDialog({
     () => ({
       colors,
       widthMm: width,
+      // Too tall for the hoop: scaled down instead of refused
+      maxHeightMm: hoopHeightMm,
       removeBackground,
       fill,
       density,
@@ -148,6 +151,7 @@ export function ImageToEmbroideryDialog({
     [
       colors,
       width,
+      hoopHeightMm,
       removeBackground,
       fill,
       density,
@@ -232,10 +236,11 @@ export function ImageToEmbroideryDialog({
     [imageUrl],
   );
 
-  const heightMm = pattern
-    ? (pattern.bounds.maxY - pattern.bounds.minY) / 10
-    : null;
+  const size = pattern ? patternSizeMm(pattern) : null;
+  const heightMm = size?.height ?? null;
   const tooLarge = heightMm !== null && heightMm > hoopHeightMm;
+  // Narrower than asked when the height had to fit the hoop
+  const scaledDown = size !== null && size.width < width - 0.5;
 
   const handleApply = () => {
     if (!pattern || !source) return;
@@ -412,7 +417,7 @@ export function ImageToEmbroideryDialog({
           {pattern && (
             <div className="flex flex-col gap-1 text-xs text-gray-700 dark:text-gray-300">
               <span>
-                {width} × {heightMm?.toFixed(1)} mm ·{" "}
+                {size?.width.toFixed(1)} × {heightMm?.toFixed(1)} mm ·{" "}
                 {pattern.penStitches.stitches.length.toLocaleString()} stitches
                 · {pattern.threads.length} thread colors
               </span>
@@ -427,6 +432,12 @@ export function ImageToEmbroideryDialog({
                   </span>
                 ))}
               </span>
+              {scaledDown && !tooLarge && (
+                <span className="text-info-700 dark:text-info-300">
+                  Scaled down from {width} mm wide so the height fits the hoop (
+                  {hoopWidthMm} × {hoopHeightMm} mm).
+                </span>
+              )}
               {tooLarge && (
                 <span className="text-warning-700 dark:text-warning-400">
                   Taller than the hoop ({hoopWidthMm} × {hoopHeightMm} mm).
