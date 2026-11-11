@@ -35,6 +35,7 @@ import {
   quantizePalette,
   findBackground,
   binarizeAlpha,
+  snapMixedPixels,
   type RGBA,
   type TracedImage,
 } from "./traceImage";
@@ -644,11 +645,14 @@ export function imageToPattern(
     background,
   );
 
+  // Trace with the edge pixels on their side: no strips of a third color
+  // along edges
+  const snapped = snapMixedPixels(image);
   let groups: ThreadGroup<unknown>[];
   let stitches: number[][];
   if (options.fill === "cross") {
     const cellGroups = groupCellsByThread(
-      image,
+      snapped,
       traced.palette,
       traced.backgroundIndex,
       traced.threads,
@@ -657,7 +661,7 @@ export function imageToPattern(
     groups = cellGroups;
     stitches = cellsToStitches(cellGroups, options);
   } else {
-    const regions = traceImage(image, traced.palette, traced.backgroundIndex);
+    const regions = traceImage(snapped, traced.palette, traced.backgroundIndex);
     const order = orderForSewing(
       groupRegionsByThread(regions, traced.threads, options),
       options,
