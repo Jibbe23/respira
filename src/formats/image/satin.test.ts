@@ -190,6 +190,8 @@ describe("satinStitches", () => {
 
   it("keeps short thin lines such as closed eyes in satin", () => {
     expect(satinStitches([rect(0, 0, 25, 8)], null, OPTIONS)).not.toBeNull();
+    // A bold i stem: 6 mm long, 1.8 mm wide
+    expect(satinStitches([rect(0, 0, 18, 60)], null, OPTIONS)).not.toBeNull();
   });
 
   it("keeps the peaks evenly spaced on the outside of curves", () => {

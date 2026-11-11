@@ -482,17 +482,18 @@ describe("imageToPattern", () => {
   });
 
   it("fills areas with rows 0.35 mm apart", () => {
+    // 9 mm square: too small for an underlay, so only fill rows count
     const image = makeImage(100, 100, () => RED);
     const { stitches } = imageToPattern(image, {
       colors: 1,
-      widthMm: 20,
+      widthMm: 9,
       removeBackground: false,
       ...TATAMI,
     })!;
     // Fill rows run at 45 degrees: their offset across the rows, for the
     // stitches in the middle of the square
     const offsets = stitches
-      .filter((s) => Math.abs(s[0]) < 50 && Math.abs(s[1]) < 50)
+      .filter((s) => Math.abs(s[0]) < 25 && Math.abs(s[1]) < 25)
       .map((s) => (s[0] - s[1]) / Math.SQRT2)
       .sort((a, b) => a - b);
     const rows: number[] = [];

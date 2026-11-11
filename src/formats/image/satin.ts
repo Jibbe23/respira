@@ -35,10 +35,11 @@ const NARROW_SHARE = 0.9;
  * Short, wide blobs (a bow lobe, the stubby tip of a shape) are no strokes:
  * their short center line fans out and leaves the ends bare. A region is
  * one if its center lines are shorter than BLOB_LENGTH times its mean width
- * and that width is over BLOB_WIDTH (1.5 mm; closed eyes stay satin)
+ * and that width is over BLOB_WIDTH (2 mm: closed eyes and short bold
+ * letter strokes stay satin)
  */
 const BLOB_LENGTH = 4;
-const BLOB_WIDTH = 15;
+const BLOB_WIDTH = 20;
 /**
  * Center line sampling for the satin peaks: fine enough that the outside
  * of a tight curve does not overshoot the spacing
@@ -540,7 +541,7 @@ export function planSatin(
   const strokes: SatinStroke[] = [];
   const halfWidths: number[] = [];
   // Length of all center lines, for telling strokes from blobs
-  let length = 0;
+  let centerLength = 0;
   for (const s of live) {
     let points = s.pixels.map((i) => {
       const x = i % raster.width;
@@ -554,7 +555,7 @@ export function planSatin(
 
     // Edge points across the stroke, sampled finely along the center line
     for (let i = 1; i < points.length; i++) {
-      length += Math.hypot(
+      centerLength += Math.hypot(
         points[i].x - points[i - 1].x,
         points[i].y - points[i - 1].y,
       );
@@ -654,8 +655,10 @@ export function planSatin(
   // Mean width = area / length of the center lines (one pixel per unit)
   let area = 0;
   for (const v of raster.inside) area += v;
-  const meanWidth = area / Math.max(1, length);
-  if (meanWidth > BLOB_WIDTH && length < BLOB_LENGTH * meanWidth) return null;
+  const meanWidth = area / Math.max(1, centerLength);
+  if (meanWidth > BLOB_WIDTH && centerLength < BLOB_LENGTH * meanWidth) {
+    return null;
+  }
 
   const freeEnd = new Set<number>();
   degree.forEach((d, id) => {
