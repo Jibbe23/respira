@@ -31,6 +31,19 @@ const MIN_HALF_WIDTH = 2;
 const MAX_WIDTH_FACTOR = 1.25;
 /** Share of the stroke samples that must be narrower than maxWidth */
 const NARROW_SHARE = 0.9;
+/**
+ * Short, wide blobs (a bow lobe, the stubby tip of a shape) are no strokes:
+ * their short center line fans out and leaves the ends bare. A region is
+ * one if its center lines are shorter than BLOB_LENGTH times its mean width
+ * and that width is over BLOB_WIDTH (1.5 mm; closed eyes stay satin)
+ */
+const BLOB_LENGTH = 4;
+/**
+ * Center line sampling for the satin peaks: fine enough that the outside
+ * of a tight curve does not overshoot the spacing
+ */
+const FINE_STEP = 0.25;
+const BLOB_WIDTH = 15;
 
 interface Raster {
   width: number;
@@ -529,14 +542,14 @@ export function planSatin(
     if (degree[s.a] === 1)
       points = extendToEdge([...points].reverse(), raster).reverse();
 
-    // Peaks alternate sides: a sample every half spacing
-    const samples = runAlongPath(points, options.spacing / 2, 0);
-    if (samples.length < 2) continue;
-    const left: Point[] = [];
-    const right: Point[] = [];
-    samples.forEach((p, i) => {
-      const prev = samples[Math.max(0, i - 1)];
-      const next = samples[Math.min(samples.length - 1, i + 1)];
+    // Edge points across the stroke, sampled finely along the center line
+    const fine = runAlongPath(points, FINE_STEP, 0);
+    if (fine.length < 2) continue;
+    const edges = fine.map((p, i) => {
+      // Direction over about one unit either side
+      const reachBack = Math.round(1 / FINE_STEP);
+      const prev = fine[Math.max(0, i - reachBack)];
+      const next = fine[Math.min(fine.length - 1, i + reachBack)];
       const tx = next.x - prev.x;
       const ty = next.y - prev.y;
       const length = Math.hypot(tx, ty) || 1;
@@ -548,9 +561,30 @@ export function planSatin(
       );
       halfWidths.push(half);
       const reach = half + options.pullCompensation;
-      left.push(toPattern({ x: p.x + nx * reach, y: p.y + ny * reach }));
-      right.push(toPattern({ x: p.x - nx * reach, y: p.y - ny * reach }));
+      return {
+        left: toPattern({ x: p.x + nx * reach, y: p.y + ny * reach }),
+        right: toPattern({ x: p.x - nx * reach, y: p.y - ny * reach }),
+      };
     });
+    // Peaks alternate sides: the next sample once either edge has moved on
+    // by half the spacing, so the outside of a curve does not fan out (the
+    // inside gets denser instead)
+    const left: Point[] = [edges[0].left];
+    const right: Point[] = [edges[0].right];
+    let last = edges[0];
+    for (let i = 1; i < edges.length; i++) {
+      const e = edges[i];
+      const moved = Math.max(
+        Math.hypot(e.left.x - last.left.x, e.left.y - last.left.y),
+        Math.hypot(e.right.x - last.right.x, e.right.y - last.right.y),
+      );
+      if (moved >= options.spacing / 2 || i === edges.length - 1) {
+        left.push(e.left);
+        right.push(e.right);
+        last = e;
+      }
+    }
+    if (left.length < 2) continue;
     strokes.push({
       a: s.a,
       b: s.b,
@@ -573,6 +607,21 @@ export function planSatin(
     ];
   if (2 * typical > options.maxWidth) return null;
   if (2 * halfWidths[halfWidths.length - 1] > maxStitch) return null;
+
+  // Mean width = area / length of the center lines (one pixel per unit)
+  let area = 0;
+  for (const v of raster.inside) area += v;
+  let length = 0;
+  for (const s of strokes) {
+    for (let i = 1; i < s.center.length; i++) {
+      length += Math.hypot(
+        s.center[i].x - s.center[i - 1].x,
+        s.center[i].y - s.center[i - 1].y,
+      );
+    }
+  }
+  const meanWidth = area / Math.max(1, length);
+  if (meanWidth > BLOB_WIDTH && length < BLOB_LENGTH * meanWidth) return null;
 
   const freeEnd = new Set<number>();
   degree.forEach((d, id) => {
