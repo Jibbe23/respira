@@ -496,12 +496,15 @@ function regionsToStitches(
       const [rings] = remaining.splice(index, 1);
       newPart = true;
 
-      // Outline along the edge
+      // Outline along the edge (`only`: just the outer ring or the holes)
       const sewOutline = (
         sewRuns: (runs: Point[][]) => void,
         repeats: Repeats,
+        only?: "outer" | "holes",
       ) => {
         for (const [i, ring] of rings.entries()) {
+          if (only === "outer" && i > 0) continue;
+          if (only === "holes" && i === 0) continue;
           // Holes too small to stay open under the grown fill get none
           if (i > 0 && holeClosesAt(ring, FILL_PULL_COMPENSATION)) continue;
           const outline = runAroundRing(
@@ -514,9 +517,10 @@ function regionsToStitches(
       };
 
       // Narrow shapes: satin across the stroke instead of a tatami fill.
-      // The outline goes first (edge run): it makes the edge crisp, and the
-      // satin covers the stitches between outer edge and holes (an outline
-      // on top would need travel across the finished letter)
+      // The holes (inside of a, e, o) get their edge run first, under the
+      // satin, which covers the travel to them; the outer edge run comes
+      // last, on top of the satin, and makes the outline crisp (holes on
+      // top would need travel or a cut across the finished letter)
       const plan = satin.get(rings);
       if (plan) {
         // Travel inside the letter (covered by the satin), not across it
@@ -531,8 +535,12 @@ function regionsToStitches(
             // A satin run is underlay out, satin back: never reversed
             allowReverse: false,
           }).forEach(sew);
-        sewOutline(sewInside, options.outlineRepeats);
+        sewOutline(sewInside, options.outlineRepeats, "holes");
         sewInside(sewSatin(plan, writer.position, satinOptions(options)));
+        // The satin ends inside the letter: the step out to the edge goes
+        // through the travel graph like all travel here (never across a
+        // hole, no bare jump over the letter)
+        sewOutline(sewInside, options.outlineRepeats, "outer");
         continue;
       }
 

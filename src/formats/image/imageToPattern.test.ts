@@ -442,6 +442,50 @@ describe("imageToPattern", () => {
     }
   });
 
+  it("sews the outer outline of a satin letter last, the hole's first", () => {
+    // An o: a ring 7 px (1.75 mm) wide around a 7.5 mm hole
+    const BLACK: Pixel = [0, 0, 0, 255];
+    const ring = makeImage(60, 60, (x, y) => {
+      const r = Math.hypot(x - 29.5, y - 29.5);
+      return r >= 15 && r < 22 ? BLACK : WHITE;
+    });
+    const { stitches } = imageToPattern(ring, {
+      colors: 1,
+      widthMm: 11,
+      removeBackground: true,
+      ...TATAMI,
+    })!;
+    const xs = stitches.map((s) => s[0]);
+    const ys = stitches.map((s) => s[1]);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const radius = (s: number[]) => Math.hypot(s[0] - cx, s[1] - cy);
+    // Edges: the satin reaches 0.2 mm past them (pull compensation)
+    const radii = stitches.map(radius);
+    const outer = Math.max(...radii) - 2;
+    const inner = Math.min(...radii) + 2;
+    // Satin: stitches across the ring; runs: stitches along one edge
+    const across: number[] = [];
+    const alongOuter: number[] = [];
+    const alongInner: number[] = [];
+    stitches.forEach((s, i) => {
+      if (i === 0 || s[2] !== 0) return;
+      const p = stitches[i - 1];
+      const radial = Math.abs(radius(s) - radius(p));
+      if (radial > 10) across.push(i);
+      const near = (r: number) =>
+        Math.abs(radius(s) - r) < 3 && Math.abs(radius(p) - r) < 3;
+      const long = Math.hypot(s[0] - p[0], s[1] - p[1]) > 10;
+      if (long && near(outer)) alongOuter.push(i);
+      if (long && near(inner)) alongInner.push(i);
+    });
+    expect(across.length).toBeGreaterThan(50);
+    expect(alongOuter.length).toBeGreaterThan(10);
+    expect(alongInner.length).toBeGreaterThan(5);
+    expect(Math.min(...alongOuter)).toBeGreaterThan(Math.max(...across));
+    expect(Math.max(...alongInner)).toBeLessThan(Math.min(...across));
+  });
+
   it("sews the lines of a thread with large areas too after all areas", () => {
     // Black: a large square and thin lines (about a third of its area);
     // red: a square
