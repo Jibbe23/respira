@@ -537,13 +537,10 @@ function regionsToStitches(
           }).forEach(sew);
         sewOutline(sewInside, options.outlineRepeats, "holes");
         sewInside(sewSatin(plan, writer.position, satinOptions(options)));
-        // The satin ends on its center line: the step out to the edge runs
-        // along the satin stitches, not across them
-        sewOutline(
-          (runs) => runs.forEach(sew),
-          options.outlineRepeats,
-          "outer",
-        );
+        // The satin ends inside the letter: the step out to the edge goes
+        // through the travel graph like all travel here (never across a
+        // hole, no bare jump over the letter)
+        sewOutline(sewInside, options.outlineRepeats, "outer");
         continue;
       }
 
